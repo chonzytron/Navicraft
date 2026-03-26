@@ -117,7 +117,7 @@ async def _call_claude(system: str, user_message: str) -> str:
                 },
                 json={
                     "model": config.claude_model,
-                    "max_tokens": 8192,
+                    "max_tokens": 16384,
                     "system": system,
                     "messages": [{"role": "user", "content": user_message}],
                 },
@@ -149,7 +149,7 @@ async def _call_gemini(system: str, user_message: str) -> str:
                 json={
                     "system_instruction": {"parts": [{"text": system}]},
                     "contents": [{"parts": [{"text": user_message}]}],
-                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
+                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 16384},
                 },
             )
 

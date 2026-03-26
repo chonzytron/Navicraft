@@ -200,7 +200,7 @@ async def scan_status():
 
 @app.post("/api/generate")
 async def generate_playlist(req: GenerateRequest):
-    """Generate a playlist using the two-pass AI strategy."""
+    """Generate a playlist using the two-pass AI strategy. Streams SSE progress events."""
 
     # Check we have indexed songs
     with db.get_db() as conn:
@@ -208,110 +208,114 @@ async def generate_playlist(req: GenerateRequest):
     if stats["song_count"] == 0:
         raise HTTPException(404, detail="Library index is empty. Run a scan first.")
 
-    try:
-        # --- Build library summary for Pass 1 ---
-        with db.get_db() as conn:
-            library_summary = {
-                "song_count": stats["song_count"],
-                "artist_count": stats["artist_count"],
-                "album_count": stats["album_count"],
-                "genres": [g["genre"] for g in db.get_genres(conn)],
-                "moods": db.get_moods(conn),
-                "top_artists": db.get_top_artists(conn, limit=150),
-                "year_range": db.get_year_range(conn),
+    async def event_stream():
+        def sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+        try:
+            # --- Pass 1 ---
+            yield sse("progress", {"phase": "pass1", "message": "Analyzing your prompt..."})
+
+            with db.get_db() as conn:
+                library_summary = {
+                    "song_count": stats["song_count"],
+                    "artist_count": stats["artist_count"],
+                    "album_count": stats["album_count"],
+                    "genres": [g["genre"] for g in db.get_genres(conn)],
+                    "moods": db.get_moods(conn),
+                    "top_artists": db.get_top_artists(conn, limit=150),
+                    "year_range": db.get_year_range(conn),
+                }
+
+            filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary)
+            yield sse("progress", {"phase": "filtering", "message": "Searching library..."})
+
+            # --- Filter candidates ---
+            with db.get_db() as conn:
+                candidates = db.filter_tracks(conn, filters, limit=config.max_candidates)
+
+            if len(candidates) < 30:
+                yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, broadening search..."})
+                broad_filters = {"genres": filters.get("genres", [])}
+                with db.get_db() as conn:
+                    candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates)
+
+            if len(candidates) < 20:
+                with db.get_db() as conn:
+                    candidates = db.filter_tracks(conn, {}, limit=config.max_candidates)
+
+            logger.info("Sending %d candidates to Pass 2", len(candidates))
+
+            # --- Pass 2 ---
+            yield sse("progress", {"phase": "pass2", "message": f"Selecting from {len(candidates)} candidates..."})
+
+            ai_result = await ai_engine.pass2_select_songs(
+                prompt=req.prompt,
+                candidates=candidates,
+                max_songs=req.max_songs,
+                target_duration_min=req.target_duration_min,
+            )
+
+            yield sse("progress", {"phase": "matching", "message": "Building playlist..."})
+
+            # --- Match selections ---
+            candidate_map = {c["id"]: c for c in candidates}
+            matched_songs = []
+            for s in ai_result.get("songs", []):
+                track = candidate_map.get(s["id"])
+                if track:
+                    matched_songs.append(track)
+
+            total_duration = sum(t.get("duration") or 0 for t in matched_songs)
+
+            result = {
+                "name": ai_result.get("name", "AI Playlist"),
+                "description": ai_result.get("description", ""),
+                "songs": matched_songs,
+                "total_matched": len(matched_songs),
+                "total_suggested": len(ai_result.get("songs", [])),
+                "total_duration": round(total_duration),
+                "filters_used": filters,
+                "candidates_found": len(candidates),
+                "created": False,
+                "navidrome_id": None,
             }
 
-        # --- Pass 1: Extract intent / filters ---
-        filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary)
+            # --- Auto-create ---
+            if req.auto_create and matched_songs:
+                nd_ids = [t["navidrome_id"] for t in matched_songs if t.get("navidrome_id")]
+                if nd_ids:
+                    try:
+                        yield sse("progress", {"phase": "saving", "message": "Saving to Navidrome..."})
+                        pl = await navidrome.create_playlist(result["name"], nd_ids)
+                        result["created"] = True
+                        result["navidrome_id"] = pl["id"]
+                        with db.get_db() as conn:
+                            db.save_playlist_log(
+                                conn,
+                                name=result["name"],
+                                description=result["description"],
+                                prompt=req.prompt,
+                                track_ids=[t["id"] for t in matched_songs],
+                                navidrome_id=pl["id"],
+                                song_count=len(matched_songs),
+                                total_duration=total_duration,
+                            )
+                    except Exception as e:
+                        logger.warning("Auto-create failed: %s", e)
+                        result["auto_create_error"] = str(e)
+                else:
+                    result["auto_create_error"] = "No Navidrome IDs matched. Run a Navidrome sync."
 
-        # --- Query SQLite for candidates ---
-        with db.get_db() as conn:
-            candidates = db.filter_tracks(conn, filters, limit=config.max_candidates)
+            yield sse("result", result)
 
-        # If filter was too narrow, broaden by relaxing constraints
-        if len(candidates) < 30:
-            logger.info("Only %d candidates after filtering, broadening search...", len(candidates))
-            broad_filters = {"genres": filters.get("genres", [])}  # keep only genre
-            with db.get_db() as conn:
-                candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates)
+        except ValueError as e:
+            yield sse("error", {"detail": str(e)})
+        except Exception:
+            logger.exception("Playlist generation failed")
+            yield sse("error", {"detail": "Playlist generation failed. Check logs."})
 
-        # If still too few, just grab random tracks
-        if len(candidates) < 20:
-            logger.info("Still only %d candidates, falling back to random sample", len(candidates))
-            with db.get_db() as conn:
-                candidates = db.filter_tracks(conn, {}, limit=config.max_candidates)
-
-        logger.info("Sending %d candidates to Pass 2", len(candidates))
-
-        # --- Pass 2: AI selects and orders ---
-        ai_result = await ai_engine.pass2_select_songs(
-            prompt=req.prompt,
-            candidates=candidates,
-            max_songs=req.max_songs,
-            target_duration_min=req.target_duration_min,
-        )
-
-        # --- Match AI selections back to full track data ---
-        selected_ids = {s["id"] for s in ai_result.get("songs", [])}
-        # Preserve AI ordering
-        id_order = {s["id"]: i for i, s in enumerate(ai_result.get("songs", []))}
-        candidate_map = {c["id"]: c for c in candidates}
-
-        matched_songs = []
-        for s in ai_result.get("songs", []):
-            track = candidate_map.get(s["id"])
-            if track:
-                matched_songs.append(track)
-
-        total_duration = sum(t.get("duration") or 0 for t in matched_songs)
-
-        result = {
-            "name": ai_result.get("name", "AI Playlist"),
-            "description": ai_result.get("description", ""),
-            "songs": matched_songs,
-            "total_matched": len(matched_songs),
-            "total_suggested": len(ai_result.get("songs", [])),
-            "total_duration": round(total_duration),
-            "filters_used": filters,
-            "candidates_found": len(candidates),
-            "created": False,
-            "navidrome_id": None,
-        }
-
-        # --- Auto-create in Navidrome ---
-        if req.auto_create and matched_songs:
-            nd_ids = [t["navidrome_id"] for t in matched_songs if t.get("navidrome_id")]
-            if nd_ids:
-                try:
-                    pl = await navidrome.create_playlist(result["name"], nd_ids)
-                    result["created"] = True
-                    result["navidrome_id"] = pl["id"]
-
-                    # Log playlist
-                    with db.get_db() as conn:
-                        db.save_playlist_log(
-                            conn,
-                            name=result["name"],
-                            description=result["description"],
-                            prompt=req.prompt,
-                            track_ids=[t["id"] for t in matched_songs],
-                            navidrome_id=pl["id"],
-                            song_count=len(matched_songs),
-                            total_duration=total_duration,
-                        )
-                except Exception as e:
-                    logger.warning("Auto-create failed: %s", e)
-                    result["auto_create_error"] = str(e)
-            else:
-                result["auto_create_error"] = "No Navidrome IDs matched. Run a Navidrome sync."
-
-        return result
-
-    except ValueError as e:
-        raise HTTPException(400, detail=str(e))
-    except Exception:
-        logger.exception("Playlist generation failed")
-        raise HTTPException(500, detail="Playlist generation failed. Check logs.")
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # =========================================================================

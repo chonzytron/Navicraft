@@ -1,14 +1,15 @@
 """
 Multi-source popularity enrichment for tracks.
 
-Sources (in order of priority):
-1. Last.fm — listener count and playcount (best real-world popularity signal)
-2. MusicBrainz — community ratings and catalog presence
-3. Local heuristic — library ownership patterns (many albums by same artist = fan)
+Sources (weighted by data quality):
+1. Last.fm — listener count + playcount (real-world usage from millions of users)
+2. MusicBrainz — community ratings + release count (how many compilations/releases)
+3. Track position heuristic — early album tracks (1-3) are more likely singles/hits
 
-Runs as a background job after library scans. Each track is scored once and
-the result is cached in the database. Scores are re-evaluated only when
-explicitly requested (e.g., full re-enrichment).
+Scoring philosophy:
+- Each source contributes a weighted sub-score based on how much data it has
+- More data points = higher confidence = higher weight in the blend
+- Unknown tracks get a neutral baseline (50) so they're not buried
 """
 
 import asyncio
@@ -34,8 +35,6 @@ LASTFM_DELAY = 0.25  # 5 req/sec allowed
 async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:
     """
     Look up a track on Last.fm. Returns listener count and playcount.
-    These are far better popularity signals than any rating system —
-    they represent actual listening behavior across millions of users.
     """
     try:
         resp = await client.get(
@@ -77,7 +76,7 @@ async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> 
 async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:
     """
     Look up a recording on MusicBrainz by artist + title.
-    Returns search score and community rating.
+    Returns search score, community rating, and release count.
     """
     query = f'recording:"{title}" AND artist:"{artist}"'
     try:
@@ -105,10 +104,15 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
         mb_rating = rating_info.get("value")  # 0-5 scale
         votes_count = rating_info.get("votes-count", 0)
 
+        # Count how many releases this recording appears on.
+        # Songs on many releases (compilations, best-ofs, soundtracks) = hits.
+        release_count = len(best.get("releases", []))
+
         return {
             "score": score,
             "mb_rating": mb_rating,
             "mb_rating_count": votes_count,
+            "release_count": release_count,
         }
 
     except (httpx.HTTPStatusError, ValueError) as e:
@@ -119,82 +123,169 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
         return None
 
 
-def _compute_local_heuristic(artist: str, album: str,
-                             artist_counts: dict, album_counts: dict) -> int:
+def _lastfm_score(lastfm: dict) -> tuple[float, float]:
     """
-    Local library heuristic: if the user owns many tracks by an artist
-    or a full album, that signals they're a fan. Boost those tracks.
+    Derive a score (0-100) and confidence weight (0-1) from Last.fm data.
 
-    Returns a bonus score (0-15) to add to the final popularity.
+    Listener count is the primary signal.
+    Replay ratio (playcount / listeners) gives a quality bonus:
+    a song people play many times is stickier than one they try once.
     """
-    bonus = 0
+    listeners = lastfm.get("listeners", 0)
+    playcount = lastfm.get("playcount", 0)
 
-    # Artist depth: owning 10+ tracks by an artist = dedicated fan
-    artist_tracks = artist_counts.get(artist, 0)
-    if artist_tracks >= 20:
-        bonus += 10
-    elif artist_tracks >= 10:
-        bonus += 7
-    elif artist_tracks >= 5:
-        bonus += 4
+    if listeners <= 0:
+        return 0.0, 0.0
 
-    # Album completeness: owning 8+ tracks from one album suggests full album
-    album_key = (artist, album) if artist and album else None
-    if album_key:
-        album_tracks = album_counts.get(album_key, 0)
-        if album_tracks >= 8:
-            bonus += 5
-        elif album_tracks >= 4:
-            bonus += 2
+    # Map listeners to 0-95 via log scale
+    # ~500 = ~38, ~5k = ~53, ~50k = ~67, ~500k = ~81, ~5M = ~95
+    log_score = math.log10(max(listeners, 1)) / math.log10(10_000_000) * 95
+    base = min(95, max(15, log_score))
 
-    return min(bonus, 15)
+    # Replay ratio bonus: avg plays per listener above 1x indicates replay value
+    if listeners > 0:
+        replay_ratio = playcount / listeners
+        # Typical ratio is 3-10 for popular tracks
+        # Give up to +5 bonus for high replay ratio
+        replay_bonus = min(5, max(0, (replay_ratio - 1) * 0.8))
+        base = min(100, base + replay_bonus)
+
+    # Confidence: high if we have substantial listener data
+    if listeners >= 100_000:
+        confidence = 1.0
+    elif listeners >= 10_000:
+        confidence = 0.9
+    elif listeners >= 1_000:
+        confidence = 0.75
+    elif listeners >= 100:
+        confidence = 0.5
+    else:
+        confidence = 0.3
+
+    return base, confidence
 
 
-def _blend_scores(lastfm: dict | None, mb: dict | None, local_bonus: int) -> int:
+def _musicbrainz_score(mb: dict) -> tuple[float, float]:
     """
-    Combine all sources into a single 0-100 popularity score.
+    Derive a score (0-100) and confidence weight (0-1) from MusicBrainz data.
 
-    Priority:
-    1. Last.fm listeners (best signal — real usage data)
-    2. MusicBrainz rating + catalog presence
-    3. Local heuristic (library ownership pattern)
-
-    If Last.fm has data, it dominates. MusicBrainz fills in gaps.
-    Local bonus always applies as a small boost.
+    Uses three signals:
+    - Community rating (0-5 scale, if votes exist)
+    - Release count (songs on many releases = well-known)
+    - Search relevance score (well-indexed = more notable)
     """
-    score = 40  # neutral baseline for unknown tracks
+    mb_rating = mb.get("mb_rating")
+    votes = mb.get("mb_rating_count", 0)
+    release_count = mb.get("release_count", 0)
+    search_score = mb.get("score", 0)
 
-    if lastfm and lastfm["listeners"] > 0:
-        # Map listener count to 0-100 using log scale
-        # ~1k listeners = ~40, ~50k = ~60, ~500k = ~75, ~5M = ~90
-        listeners = lastfm["listeners"]
-        if listeners > 0:
-            log_score = math.log10(max(listeners, 1)) / math.log10(10_000_000) * 100
-            score = min(95, max(20, int(log_score)))
+    components = []
+    total_weight = 0
 
-    elif mb and mb.get("score", 0) > 0:
-        # Fall back to MusicBrainz
-        mb_score = mb["score"]
-        mb_rating = mb.get("mb_rating")
-        mb_votes = mb.get("mb_rating_count", 0)
-
-        if mb_rating is not None and mb_votes > 0:
-            rating_norm = (mb_rating / 5.0) * 100
-            score = int(mb_score * 0.5 + rating_norm * 0.5)
+    # Community rating — only trust it with enough votes
+    if mb_rating is not None and votes > 0:
+        rating_norm = (mb_rating / 5.0) * 100
+        if votes >= 10:
+            components.append(rating_norm * 0.5)
+            total_weight += 0.5
+        elif votes >= 3:
+            components.append(rating_norm * 0.3)
+            total_weight += 0.3
         else:
-            # Just catalog presence — a high search score means it's well-indexed
-            score = int(mb_score * 0.7)
+            components.append(rating_norm * 0.1)
+            total_weight += 0.1
 
-    # Apply local bonus (capped at 100)
-    score = min(100, score + local_bonus)
+    # Release count — appearing on compilations/best-ofs is a strong hit signal
+    if release_count > 0:
+        # 1 release = normal, 3+ = likely single, 5+ = definite hit
+        release_score = min(90, 40 + release_count * 10)
+        release_weight = min(0.4, release_count * 0.08)
+        components.append(release_score * release_weight)
+        total_weight += release_weight
 
-    return max(0, min(100, score))
+    # Search score — baseline signal, always available
+    search_weight = max(0.1, 0.5 - total_weight)
+    components.append(search_score * search_weight)
+    total_weight += search_weight
+
+    if total_weight > 0:
+        score = sum(components) / total_weight
+    else:
+        score = search_score * 0.6
+
+    # Confidence depends on how much real data we have
+    confidence = 0.0
+    if votes >= 10:
+        confidence = 0.7
+    elif votes >= 3:
+        confidence = 0.5
+    elif release_count >= 3:
+        confidence = 0.45
+    elif search_score >= 90:
+        confidence = 0.3
+    else:
+        confidence = 0.2
+
+    return min(100, max(0, score)), confidence
+
+
+def _track_position_bonus(track_number: int | None) -> int:
+    """
+    Albums typically front-load singles and stronger tracks.
+    Track 1-2 are often the lead singles or openers chosen to hook listeners.
+    Track 3-4 often includes the second single.
+
+    Returns a small bonus (0-5).
+    """
+    if track_number is None:
+        return 0
+    if track_number <= 2:
+        return 5
+    if track_number <= 4:
+        return 3
+    return 0
+
+
+def _blend_scores(lastfm: dict | None, mb: dict | None,
+                  track_number: int | None) -> int:
+    """
+    Combine all sources into a single 0-100 score.
+
+    Strategy: weighted average where each source's weight is its confidence.
+    If both sources have high confidence, both contribute.
+    If only one has data, it dominates. Unknown tracks get baseline 50.
+    """
+    scores_and_weights = []
+
+    if lastfm and lastfm.get("listeners", 0) > 0:
+        lfm_score, lfm_conf = _lastfm_score(lastfm)
+        scores_and_weights.append((lfm_score, lfm_conf))
+
+    if mb and mb.get("score", 0) > 0:
+        mb_score, mb_conf = _musicbrainz_score(mb)
+        scores_and_weights.append((mb_score, mb_conf))
+
+    if not scores_and_weights:
+        # No external data at all — neutral baseline
+        return min(100, 50 + _track_position_bonus(track_number))
+
+    # Weighted average by confidence
+    total_weight = sum(w for _, w in scores_and_weights)
+    if total_weight > 0:
+        blended = sum(s * w for s, w in scores_and_weights) / total_weight
+    else:
+        blended = 50
+
+    # Apply track position bonus
+    blended += _track_position_bonus(track_number)
+
+    return max(0, min(100, int(blended)))
 
 
 async def enrich_popularity(batch_size: int = 200):
     """
     Fetch popularity scores for tracks that don't have one yet.
-    Uses Last.fm (if API key configured) + MusicBrainz + local heuristics.
+    Uses Last.fm (if API key configured) + MusicBrainz + track position.
     Processes in batches to respect rate limits.
     """
     with db.get_db() as conn:
@@ -206,16 +297,11 @@ async def enrich_popularity(batch_size: int = 200):
 
     logger.info("Popularity: enriching %d tracks", len(tracks))
 
-    # Pre-compute local heuristics (one query, used for all tracks)
-    with db.get_db() as conn:
-        artist_counts = db.get_artist_track_counts(conn)
-        album_counts = db.get_album_track_counts(conn)
-
     has_lastfm = bool(config.lastfm_api_key)
     if has_lastfm:
-        logger.info("Popularity: using Last.fm + MusicBrainz + local heuristics")
+        logger.info("Popularity: using Last.fm + MusicBrainz")
     else:
-        logger.info("Popularity: using MusicBrainz + local heuristics (no LASTFM_API_KEY set)")
+        logger.info("Popularity: using MusicBrainz only (set LASTFM_API_KEY for better results)")
 
     enriched = 0
     skipped = 0
@@ -227,39 +313,27 @@ async def enrich_popularity(batch_size: int = 200):
         for track in tracks:
             artist = track.get("artist", "")
             title = track.get("title", "")
+            track_number = track.get("track_number")
 
             if not artist or not title:
-                local_bonus = _compute_local_heuristic(
-                    artist, track.get("album", ""), artist_counts, album_counts
-                )
                 with db.get_db() as conn:
-                    db.update_popularity(conn, track["id"], 25 + local_bonus, None, 0)
+                    db.update_popularity(conn, track["id"], 30, None, 0)
                 skipped += 1
                 continue
 
-            # Source 1: Last.fm
+            # Source 1: Last.fm (if configured)
             lastfm_result = None
             if has_lastfm:
                 lastfm_result = await _lookup_lastfm(client, artist, title)
                 await asyncio.sleep(LASTFM_DELAY)
 
-            # Source 2: MusicBrainz (always, but skip if Last.fm gave strong data)
-            mb_result = None
-            need_mb = (
-                lastfm_result is None
-                or lastfm_result.get("listeners", 0) == 0
-            )
-            if need_mb:
-                mb_result = await _lookup_musicbrainz(client, artist, title)
-                await asyncio.sleep(MB_DELAY)
-
-            # Source 3: Local heuristic
-            local_bonus = _compute_local_heuristic(
-                artist, track.get("album", ""), artist_counts, album_counts
-            )
+            # Source 2: MusicBrainz
+            # Always query — even if Last.fm has data, MB release count adds value
+            mb_result = await _lookup_musicbrainz(client, artist, title)
+            await asyncio.sleep(MB_DELAY)
 
             # Blend all sources
-            popularity = _blend_scores(lastfm_result, mb_result, local_bonus)
+            popularity = _blend_scores(lastfm_result, mb_result, track_number)
 
             # Store results
             with db.get_db() as conn:

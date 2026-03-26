@@ -364,7 +364,7 @@ def save_playlist_log(db: sqlite3.Connection, name: str, description: str,
 def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> list[dict]:
     """Get tracks that haven't been enriched with popularity data yet."""
     rows = db.execute("""
-        SELECT id, title, artist, album
+        SELECT id, title, artist, album, track_number
         FROM tracks
         WHERE popularity IS NULL AND title IS NOT NULL
         ORDER BY id
@@ -395,24 +395,3 @@ def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
           lastfm_listeners, lastfm_playcount, track_id))
 
 
-def get_artist_track_counts(db: sqlite3.Connection) -> dict[str, int]:
-    """Get track counts per artist for local heuristic scoring."""
-    rows = db.execute("""
-        SELECT artist, COUNT(*) as cnt
-        FROM tracks
-        WHERE artist IS NOT NULL AND artist != ''
-        GROUP BY artist
-    """).fetchall()
-    return {r["artist"]: r["cnt"] for r in rows}
-
-
-def get_album_track_counts(db: sqlite3.Connection) -> dict[tuple, int]:
-    """Get track counts per album for local heuristic scoring."""
-    rows = db.execute("""
-        SELECT artist, album, COUNT(*) as cnt
-        FROM tracks
-        WHERE artist IS NOT NULL AND album IS NOT NULL
-              AND artist != '' AND album != ''
-        GROUP BY artist, album
-    """).fetchall()
-    return {(r["artist"], r["album"]): r["cnt"] for r in rows}

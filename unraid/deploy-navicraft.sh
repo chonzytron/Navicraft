@@ -47,6 +47,10 @@ CLAUDE_MODEL="claude-sonnet-4-20250514"
 GEMINI_API_KEY=""
 GEMINI_MODEL="gemini-2.0-flash"
 
+# Last.fm API key (optional — improves popularity scoring)
+# Get a free key at https://www.last.fm/api/account/create
+LASTFM_API_KEY=""
+
 # Scanner settings
 SCAN_INTERVAL_HOURS="6"
 
@@ -111,6 +115,7 @@ docker run -d \
     -e "CLAUDE_MODEL=$CLAUDE_MODEL" \
     -e "GEMINI_API_KEY=$GEMINI_API_KEY" \
     -e "GEMINI_MODEL=$GEMINI_MODEL" \
+    -e "LASTFM_API_KEY=$LASTFM_API_KEY" \
     -e "SCAN_INTERVAL_HOURS=$SCAN_INTERVAL_HOURS" \
     -e "SCAN_EXTENSIONS=.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc" \
     -e "MAX_CANDIDATES=500" \

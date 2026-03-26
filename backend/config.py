@@ -28,6 +28,9 @@ class Config:
         "SCAN_EXTENSIONS", ".mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc"
     ))
 
+    # Last.fm API (optional — for popularity enrichment)
+    lastfm_api_key: str = field(default_factory=lambda: os.getenv("LASTFM_API_KEY", ""))
+
     # AI settings
     max_candidates: int = field(default_factory=lambda: int(os.getenv("MAX_CANDIDATES", "500")))
 

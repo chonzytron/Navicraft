@@ -40,7 +40,9 @@ CREATE TABLE IF NOT EXISTS tracks (
     navidrome_id    TEXT,
     popularity      INTEGER,
     mb_rating       REAL,
-    mb_rating_count INTEGER DEFAULT 0
+    mb_rating_count INTEGER DEFAULT 0,
+    lastfm_listeners INTEGER,
+    lastfm_playcount INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
@@ -91,6 +93,8 @@ def _migrate(conn: sqlite3.Connection):
         ("popularity", "INTEGER"),
         ("mb_rating", "REAL"),
         ("mb_rating_count", "INTEGER DEFAULT 0"),
+        ("lastfm_listeners", "INTEGER"),
+        ("lastfm_playcount", "INTEGER"),
     ]
     for col, typ in migrations:
         if col not in columns:
@@ -378,9 +382,37 @@ def count_tracks_without_popularity(db: sqlite3.Connection) -> int:
 
 
 def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
-                      mb_rating: float | None, mb_rating_count: int):
+                      mb_rating: float | None, mb_rating_count: int,
+                      lastfm_listeners: int | None = None,
+                      lastfm_playcount: int | None = None):
     """Update popularity data for a track."""
     db.execute("""
-        UPDATE tracks SET popularity = ?, mb_rating = ?, mb_rating_count = ?
+        UPDATE tracks
+        SET popularity = ?, mb_rating = ?, mb_rating_count = ?,
+            lastfm_listeners = ?, lastfm_playcount = ?
         WHERE id = ?
-    """, (popularity, mb_rating, mb_rating_count, track_id))
+    """, (popularity, mb_rating, mb_rating_count,
+          lastfm_listeners, lastfm_playcount, track_id))
+
+
+def get_artist_track_counts(db: sqlite3.Connection) -> dict[str, int]:
+    """Get track counts per artist for local heuristic scoring."""
+    rows = db.execute("""
+        SELECT artist, COUNT(*) as cnt
+        FROM tracks
+        WHERE artist IS NOT NULL AND artist != ''
+        GROUP BY artist
+    """).fetchall()
+    return {r["artist"]: r["cnt"] for r in rows}
+
+
+def get_album_track_counts(db: sqlite3.Connection) -> dict[tuple, int]:
+    """Get track counts per album for local heuristic scoring."""
+    rows = db.execute("""
+        SELECT artist, album, COUNT(*) as cnt
+        FROM tracks
+        WHERE artist IS NOT NULL AND album IS NOT NULL
+              AND artist != '' AND album != ''
+        GROUP BY artist, album
+    """).fetchall()
+    return {(r["artist"], r["album"]): r["cnt"] for r in rows}

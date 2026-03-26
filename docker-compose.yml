@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   navicraft:
     build: .
@@ -12,9 +10,6 @@ services:
       # Mount your music library (read-only) — adjust left side to your path
       - ${MUSIC_PATH:-/mnt/user/media/music}:/music:ro
       # Persist the SQLite index between restarts
-      - navicraft-data:/data
+      - ${APPDATA_PATH:-./data}:/data
     env_file:
       - .env
-
-volumes:
-  navicraft-data:

@@ -1,0 +1,193 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>navicraft</Name>
+  <Repository>ghcr.io/chonzytron/navicraft:latest</Repository>
+  <Registry>https://ghcr.io/chonzytron/navicraft</Registry>
+  <Branch>
+    <Tag>latest</Tag>
+    <TagDescription>Latest stable release</TagDescription>
+  </Branch>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/chonzytron/navicraft/issues</Support>
+  <Project>https://github.com/chonzytron/navicraft</Project>
+  <Overview>NaviCraft is an AI-powered playlist generator for Navidrome. It scans your local music library, builds a metadata index, and uses AI (Claude or Gemini) to generate playlists from free-form text prompts like "chill jazz for a rainy evening" or "high energy workout mix".</Overview>
+  <Category>MediaApp:Music</Category>
+  <Icon>https://raw.githubusercontent.com/chonzytron/navicraft/main/frontend/assets/icon.png</Icon>
+  <Description>NaviCraft - AI-powered playlist generator for Navidrome. Scans your music library and uses AI to create playlists from natural language prompts.</Description>
+  <WebUI>http://[IP]:[PORT:8085]</WebUI>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <DonateText/>
+  <DonateLink/>
+  <DonateImg/>
+
+  <!-- Web UI Port -->
+  <Config
+    Name="Web UI Port"
+    Target="8085"
+    Default="8085"
+    Mode="tcp"
+    Description="Port for the NaviCraft web interface"
+    Type="Port"
+    Display="always"
+    Required="true"
+    Mask="false">8085</Config>
+
+  <!-- Music Library Path -->
+  <Config
+    Name="Music Library"
+    Target="/music"
+    Default="/mnt/user/media/music"
+    Mode="ro"
+    Description="Path to your music library (same path Navidrome uses). Mounted read-only."
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/mnt/user/media/music</Config>
+
+  <!-- App Data -->
+  <Config
+    Name="App Data"
+    Target="/data"
+    Default="/mnt/user/appdata/navicraft"
+    Mode="rw"
+    Description="Path for NaviCraft database and persistent data"
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/mnt/user/appdata/navicraft</Config>
+
+  <!-- Navidrome Connection -->
+  <Config
+    Name="Navidrome URL"
+    Target="NAVIDROME_URL"
+    Default="http://navidrome:4533"
+    Description="URL to your Navidrome instance. Use container name if on same Docker network, or http://[UNRAID_IP]:4533 for bridge mode."
+    Type="Variable"
+    Display="always"
+    Required="true"
+    Mask="false">http://navidrome:4533</Config>
+
+  <Config
+    Name="Navidrome User"
+    Target="NAVIDROME_USER"
+    Default="admin"
+    Description="Navidrome admin username"
+    Type="Variable"
+    Display="always"
+    Required="true"
+    Mask="false">admin</Config>
+
+  <Config
+    Name="Navidrome Password"
+    Target="NAVIDROME_PASSWORD"
+    Default=""
+    Description="Navidrome admin password"
+    Type="Variable"
+    Display="always"
+    Required="true"
+    Mask="true"></Config>
+
+  <!-- AI Provider -->
+  <Config
+    Name="AI Provider"
+    Target="AI_PROVIDER"
+    Default="claude"
+    Description="AI provider to use: 'claude' or 'gemini'"
+    Type="Variable"
+    Display="always"
+    Required="true"
+    Mask="false">claude</Config>
+
+  <Config
+    Name="Claude API Key"
+    Target="CLAUDE_API_KEY"
+    Default=""
+    Description="Anthropic API key (required if AI_PROVIDER=claude)"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
+    Name="Claude Model"
+    Target="CLAUDE_MODEL"
+    Default="claude-sonnet-4-20250514"
+    Description="Claude model to use"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">claude-sonnet-4-20250514</Config>
+
+  <Config
+    Name="Gemini API Key"
+    Target="GEMINI_API_KEY"
+    Default=""
+    Description="Google Gemini API key (required if AI_PROVIDER=gemini)"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
+    Name="Gemini Model"
+    Target="GEMINI_MODEL"
+    Default="gemini-2.0-flash"
+    Description="Gemini model to use"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">gemini-2.0-flash</Config>
+
+  <!-- Scanner Settings -->
+  <Config
+    Name="Scan Interval (hours)"
+    Target="SCAN_INTERVAL_HOURS"
+    Default="6"
+    Description="How often to automatically re-scan the music library (in hours)"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">6</Config>
+
+  <Config
+    Name="Scan Extensions"
+    Target="SCAN_EXTENSIONS"
+    Default=".mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc"
+    Description="Comma-separated list of audio file extensions to scan"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc</Config>
+
+  <!-- Internal paths -->
+  <Config
+    Name="Music Dir (container)"
+    Target="MUSIC_DIR"
+    Default="/music"
+    Description="Music directory inside the container (don't change unless you know why)"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">/music</Config>
+
+  <Config
+    Name="Database Path"
+    Target="DB_PATH"
+    Default="/data/navicraft.db"
+    Description="SQLite database path inside the container"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">/data/navicraft.db</Config>
+
+  <Config
+    Name="Max Candidates"
+    Target="MAX_CANDIDATES"
+    Default="500"
+    Description="Maximum number of candidate songs sent to AI Pass 2"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">500</Config>
+</Container>

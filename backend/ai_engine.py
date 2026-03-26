@@ -12,6 +12,7 @@ Pass 2 — Song Selection:
   Send prompt + candidate list to AI. AI picks and orders the final playlist.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -70,18 +71,34 @@ Rules:
 
 
 def _parse_json(text: str) -> dict:
-    """Parse JSON from AI response, handling markdown fences."""
+    """Parse JSON from AI response, handling markdown fences and thinking blocks."""
     text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    # Strip markdown code fences (possibly multiple)
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```", "", text)
     text = text.strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            return json.loads(match.group())
-        raise ValueError(f"Could not parse AI JSON response: {text[:200]}")
+        # Find the last top-level JSON object — thinking models may emit
+        # reasoning text before the actual JSON payload
+        last_match = None
+        for match in re.finditer(r"\{", text):
+            start = match.start()
+            try:
+                obj = json.loads(text[start:])
+                last_match = obj
+                break
+            except json.JSONDecodeError:
+                continue
+        # Fallback: grab the largest {...} block
+        if last_match is None:
+            match = re.search(r"\{[\s\S]*\}", text)
+            if match:
+                return json.loads(match.group())
+        if last_match is not None:
+            return last_match
+        raise ValueError(f"Could not parse AI JSON response: {text[:300]}")
 
 
 async def _call_claude(system: str, user_message: str) -> str:
@@ -108,26 +125,42 @@ async def _call_claude(system: str, user_message: str) -> str:
 
 
 async def _call_gemini(system: str, user_message: str) -> str:
-    """Call the Gemini API and return the text response."""
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{config.gemini_model}:generateContent",
-            params={"key": config.gemini_api_key},
-            headers={"content-type": "application/json"},
-            json={
-                "system_instruction": {"parts": [{"text": system}]},
-                "contents": [{"parts": [{"text": user_message}]}],
-                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    """Call the Gemini API and return the text response, with retry for transient errors."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{config.gemini_model}:generateContent",
+                params={"key": config.gemini_api_key},
+                headers={"content-type": "application/json"},
+                json={
+                    "system_instruction": {"parts": [{"text": system}]},
+                    "contents": [{"parts": [{"text": user_message}]}],
+                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
+                },
+            )
 
-    text = ""
-    for candidate in data.get("candidates", []):
-        for part in candidate.get("content", {}).get("parts", []):
-            text += part.get("text", "")
-    return text
+            if resp.status_code in (429, 503) and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Gemini returned %d, retrying in %ds (attempt %d/%d)", resp.status_code, wait, attempt + 1, max_retries)
+                await asyncio.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            data = resp.json()
+
+        text = ""
+        for candidate in data.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                text += part.get("text", "")
+
+        if not text.strip():
+            logger.warning("Gemini returned empty response, raw: %s", json.dumps(data)[:500])
+            raise ValueError("Gemini returned an empty response")
+
+        return text
+
+    raise ValueError("Gemini API failed after retries")
 
 
 async def _call_ai(system: str, user_message: str) -> str:
@@ -209,6 +242,10 @@ Candidates:
 
     logger.info("Pass 2: selecting from %d candidates (max %d songs)", len(candidates), max_songs)
     text = await _call_ai(PASS2_SYSTEM, user_msg)
-    result = _parse_json(text)
+    try:
+        result = _parse_json(text)
+    except (json.JSONDecodeError, ValueError):
+        logger.error("Pass 2: failed to parse AI response: %s", text[:500])
+        raise ValueError("AI returned an invalid response for Pass 2. Try again.")
     logger.info("Pass 2: AI selected %d songs", len(result.get("songs", [])))
     return result

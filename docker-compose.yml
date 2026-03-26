@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  navicraft:
+    build: .
+    image: navicraft:latest
+    container_name: navicraft
+    restart: unless-stopped
+    ports:
+      - "${NAVICRAFT_PORT:-8085}:8085"
+    volumes:
+      # Mount your music library (read-only) — adjust left side to your path
+      - ${MUSIC_PATH:-/mnt/user/media/music}:/music:ro
+      # Persist the SQLite index between restarts
+      - navicraft-data:/data
+    env_file:
+      - .env
+
+volumes:
+  navicraft-data:

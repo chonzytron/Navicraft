@@ -1,0 +1,214 @@
+"""
+Two-pass AI playlist generation engine.
+
+Pass 1 — Intent Extraction:
+  Send the prompt + library summary (genres, artists, year range) to the AI.
+  AI returns structured filters (genres, eras, moods, artists, tempo).
+
+SQLite Query:
+  Use filters to query candidates from the local index.
+
+Pass 2 — Song Selection:
+  Send prompt + candidate list to AI. AI picks and orders the final playlist.
+"""
+
+import json
+import logging
+import re
+import httpx
+from config import config
+
+logger = logging.getLogger(__name__)
+
+# --- Prompts ---
+
+PASS1_SYSTEM = """You are a music analysis AI. Given a user's playlist prompt and a summary of their music library, extract structured search filters that will help find matching songs.
+
+Respond ONLY with a JSON object (no markdown, no backticks):
+{
+  "genres": ["genre1", "genre2"],
+  "year_min": 1990,
+  "year_max": 2005,
+  "artists": ["artist1", "artist2"],
+  "moods": ["mood1"],
+  "bpm_min": null,
+  "bpm_max": null,
+  "keywords": ["keyword1", "keyword2"],
+  "reasoning": "Brief explanation of your filter choices"
+}
+
+Rules:
+- genres: select broadly — include related/adjacent genres. If the prompt is about mood rather than genre, include genres that typically carry that mood.
+- artists: only include if the prompt implies specific artists or very specific styles. Leave empty for open-ended prompts.
+- years: set range if the prompt implies an era. Use null for no constraint.
+- moods: include if mood tags might exist (e.g. "chill", "energetic", "melancholy", "dark", "uplifting")
+- bpm: set range if tempo matters (workout=120-160, chill=60-100, etc). Use null otherwise.
+- keywords: additional terms that might appear in song titles, comments, or album names
+- Cast a WIDE net — it's better to include too many candidates than too few. The second pass will refine.
+"""
+
+PASS2_SYSTEM = """You are a music curator. Given a user's playlist prompt and a list of candidate songs from their library, select and order the final playlist.
+
+Respond ONLY with a JSON object (no markdown, no backticks):
+{
+  "name": "Playlist Name",
+  "description": "Brief 1-2 sentence description of the playlist vibe",
+  "songs": [
+    {"id": 123, "title": "Song Title", "artist": "Artist Name"},
+    {"id": 456, "title": "Song Title", "artist": "Artist Name"}
+  ]
+}
+
+Rules:
+- ONLY select songs from the provided candidate list, using their exact "id" values
+- Order songs for good flow — consider energy arc, key, tempo, and transitions
+- Mix artists — don't cluster songs by the same artist unless the prompt asks for it
+- If the user specified a number of songs or total duration, honor it
+- The "id" field is critical — it must match the candidate's id exactly
+- If few candidates match, include what fits and explain in the description
+"""
+
+
+def _parse_json(text: str) -> dict:
+    """Parse JSON from AI response, handling markdown fences."""
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            return json.loads(match.group())
+        raise ValueError(f"Could not parse AI JSON response: {text[:200]}")
+
+
+async def _call_claude(system: str, user_message: str) -> str:
+    """Call the Claude API and return the text response."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": config.claude_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": config.claude_model,
+                "max_tokens": 8192,
+                "system": system,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    return "".join(b["text"] for b in data.get("content", []) if b.get("type") == "text")
+
+
+async def _call_gemini(system: str, user_message: str) -> str:
+    """Call the Gemini API and return the text response."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{config.gemini_model}:generateContent",
+            params={"key": config.gemini_api_key},
+            headers={"content-type": "application/json"},
+            json={
+                "system_instruction": {"parts": [{"text": system}]},
+                "contents": [{"parts": [{"text": user_message}]}],
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    text = ""
+    for candidate in data.get("candidates", []):
+        for part in candidate.get("content", {}).get("parts", []):
+            text += part.get("text", "")
+    return text
+
+
+async def _call_ai(system: str, user_message: str) -> str:
+    """Route to configured AI provider."""
+    provider = config.ai_provider.lower()
+    if provider == "claude":
+        if not config.claude_api_key:
+            raise ValueError("CLAUDE_API_KEY is not set")
+        return await _call_claude(system, user_message)
+    elif provider == "gemini":
+        if not config.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not set")
+        return await _call_gemini(system, user_message)
+    else:
+        raise ValueError(f"Unknown AI provider: {provider}")
+
+
+async def pass1_extract_intent(prompt: str, library_summary: dict) -> dict:
+    """
+    Pass 1: Extract search filters from the user's prompt.
+    library_summary should contain: genres, top_artists, year_range
+    """
+    user_msg = f"""My music library contains:
+- Genres: {', '.join(library_summary.get('genres', [])[:80])}
+- Top artists ({library_summary.get('artist_count', 0)} total): {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:100])}
+- Years: {library_summary.get('year_range', {}).get('min_year', '?')} to {library_summary.get('year_range', {}).get('max_year', '?')}
+- Total songs: {library_summary.get('song_count', 0)}
+{f"- Moods tagged: {', '.join(m['mood'] for m in library_summary.get('moods', [])[:40])}" if library_summary.get('moods') else ''}
+
+User's playlist prompt: "{prompt}"
+
+Extract the search filters to find candidate songs."""
+
+    logger.info("Pass 1: extracting intent from prompt")
+    text = await _call_ai(PASS1_SYSTEM, user_msg)
+    filters = _parse_json(text)
+    logger.info("Pass 1 result: %s", json.dumps(filters, indent=2))
+    return filters
+
+
+async def pass2_select_songs(
+    prompt: str,
+    candidates: list[dict],
+    max_songs: int,
+    target_duration_min: int = None,
+) -> dict:
+    """
+    Pass 2: Select and order songs from the filtered candidates.
+    """
+    # Build candidate list text
+    candidate_lines = []
+    for c in candidates:
+        parts = [f"id={c['id']}", f'"{c["title"]}"', f"by {c['artist']}"]
+        if c.get("album"):
+            parts.append(f"[{c['album']}]")
+        if c.get("genre"):
+            parts.append(f"({c['genre']})")
+        if c.get("year"):
+            parts.append(f"{c['year']}")
+        if c.get("duration"):
+            m, s = divmod(int(c["duration"]), 60)
+            parts.append(f"{m}:{s:02d}")
+        if c.get("bpm"):
+            parts.append(f"{c['bpm']}bpm")
+        if c.get("mood"):
+            parts.append(f"mood:{c['mood']}")
+        candidate_lines.append(" | ".join(parts))
+
+    duration_note = ""
+    if target_duration_min:
+        duration_note = f"\nTarget total playlist duration: approximately {target_duration_min} minutes."
+
+    user_msg = f"""Playlist prompt: "{prompt}"
+
+Select up to {max_songs} songs from these {len(candidates)} candidates.{duration_note}
+
+Candidates:
+{chr(10).join(candidate_lines)}"""
+
+    logger.info("Pass 2: selecting from %d candidates (max %d songs)", len(candidates), max_songs)
+    text = await _call_ai(PASS2_SYSTEM, user_msg)
+    result = _parse_json(text)
+    logger.info("Pass 2: AI selected %d songs", len(result.get("songs", [])))
+    return result

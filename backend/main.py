@@ -19,6 +19,7 @@ import scanner
 import navidrome
 import ai_engine
 import scheduler as sched
+import popularity
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,6 +69,12 @@ async def _initial_scan():
             logger.warning("Navidrome ID sync failed (Navidrome may not be available yet)")
 
         _scan_progress.update(phase="idle", message="Ready")
+
+        # Enrich new tracks with popularity data
+        try:
+            await popularity.enrich_popularity(batch_size=200)
+        except Exception:
+            logger.warning("Startup popularity enrichment failed")
     except Exception:
         logger.exception("Startup scan failed")
         _scan_progress.update(phase="error", message="Startup scan failed")
@@ -167,6 +174,13 @@ async def trigger_scan(full: bool = False):
                 await navidrome.sync_navidrome_ids()
             except Exception:
                 logger.warning("Navidrome ID sync failed after scan")
+
+            # Enrich new tracks with popularity data
+            try:
+                _scan_progress.update(phase="enriching", message="Fetching popularity data...")
+                await popularity.enrich_popularity(batch_size=200)
+            except Exception:
+                logger.warning("Popularity enrichment failed after scan")
 
             _scan_progress.update(phase="idle", message="Ready")
             return stats

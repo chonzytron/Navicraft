@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from config import config
 import scanner
 import navidrome
+import popularity
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,12 @@ async def _scheduled_scan():
         # Sync Navidrome IDs if any changes
         if stats.get("added", 0) > 0 or stats.get("updated", 0) > 0:
             await navidrome.sync_navidrome_ids()
+
+        # Enrich new tracks with popularity data from MusicBrainz
+        try:
+            await popularity.enrich_popularity(batch_size=200)
+        except Exception:
+            logger.warning("Popularity enrichment failed")
     except Exception:
         logger.exception("Scheduled scan failed")
 

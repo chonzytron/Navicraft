@@ -67,6 +67,8 @@ Rules:
 - If the user specified a number of songs or total duration, honor it
 - The "id" field is critical — it must match the candidate's id exactly
 - If few candidates match, include what fits and explain in the description
+- STRONGLY prefer songs with higher popularity scores (shown as "pop:XX" where XX is 0-100). These are well-known, beloved tracks that listeners are more likely to enjoy. Avoid obscure deep cuts unless the prompt specifically asks for hidden gems or rare tracks.
+- Aim for a playlist that a typical fan of the genre/mood would recognize and enjoy
 """
 
 
@@ -227,6 +229,8 @@ async def pass2_select_songs(
             parts.append(f"{c['bpm']}bpm")
         if c.get("mood"):
             parts.append(f"mood:{c['mood']}")
+        if c.get("popularity") is not None:
+            parts.append(f"pop:{c['popularity']}")
         candidate_lines.append(" | ".join(parts))
 
     duration_note = ""

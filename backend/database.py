@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     comment         TEXT,
     label           TEXT,
     mood            TEXT,
-    navidrome_id    TEXT
+    navidrome_id    TEXT,
+    popularity      INTEGER,
+    mb_rating       REAL,
+    mb_rating_count INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
@@ -75,9 +78,24 @@ CREATE TABLE IF NOT EXISTS playlists (
 def init_db():
     """Initialize the database and create tables."""
     os.makedirs(os.path.dirname(config.db_path), exist_ok=True)
-    with get_db() as db:
-        db.executescript(SCHEMA)
+    with get_db() as conn:
+        conn.executescript(SCHEMA)
+        _migrate(conn)
     logger.info("Database initialized at %s", config.db_path)
+
+
+def _migrate(conn: sqlite3.Connection):
+    """Add columns that may not exist in older databases."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+    migrations = [
+        ("popularity", "INTEGER"),
+        ("mb_rating", "REAL"),
+        ("mb_rating_count", "INTEGER DEFAULT 0"),
+    ]
+    for col, typ in migrations:
+        if col not in columns:
+            conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {typ}")
+            logger.info("Migrated: added column '%s' to tracks", col)
 
 
 @contextmanager
@@ -267,7 +285,8 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500) -> li
 
     rows = db.execute(f"""
         SELECT id, title, artist, album_artist, album, genre, year,
-               duration, bpm, composer, mood, navidrome_id, file_path
+               duration, bpm, composer, mood, navidrome_id, file_path,
+               popularity
         FROM tracks
         WHERE {where}
         ORDER BY RANDOM()
@@ -334,3 +353,34 @@ def save_playlist_log(db: sqlite3.Connection, name: str, description: str,
         INSERT INTO playlists (name, description, prompt, track_ids, navidrome_id, song_count, total_duration)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (name, description, prompt, json.dumps(track_ids), navidrome_id, song_count, total_duration))
+
+
+# --- Popularity ---
+
+def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> list[dict]:
+    """Get tracks that haven't been enriched with popularity data yet."""
+    rows = db.execute("""
+        SELECT id, title, artist, album
+        FROM tracks
+        WHERE popularity IS NULL AND title IS NOT NULL
+        ORDER BY id
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_tracks_without_popularity(db: sqlite3.Connection) -> int:
+    """Count tracks without popularity data."""
+    row = db.execute(
+        "SELECT COUNT(*) as cnt FROM tracks WHERE popularity IS NULL AND title IS NOT NULL"
+    ).fetchone()
+    return row["cnt"]
+
+
+def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
+                      mb_rating: float | None, mb_rating_count: int):
+    """Update popularity data for a track."""
+    db.execute("""
+        UPDATE tracks SET popularity = ?, mb_rating = ?, mb_rating_count = ?
+        WHERE id = ?
+    """, (popularity, mb_rating, mb_rating_count, track_id))

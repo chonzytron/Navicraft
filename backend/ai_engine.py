@@ -104,33 +104,44 @@ def _parse_json(text: str) -> dict:
 
 
 async def _call_claude(system: str, user_message: str) -> str:
-    """Call the Claude API and return the text response."""
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": config.claude_api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": config.claude_model,
-                "max_tokens": 8192,
-                "system": system,
-                "messages": [{"role": "user", "content": user_message}],
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    """Call the Claude API and return the text response, with retry for transient errors."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        async with httpx.AsyncClient(timeout=180) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": config.claude_api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": config.claude_model,
+                    "max_tokens": 8192,
+                    "system": system,
+                    "messages": [{"role": "user", "content": user_message}],
+                },
+            )
 
-    return "".join(b["text"] for b in data.get("content", []) if b.get("type") == "text")
+            if resp.status_code in (429, 500, 502, 503, 529) and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Claude returned %d, retrying in %ds (attempt %d/%d)", resp.status_code, wait, attempt + 1, max_retries)
+                await asyncio.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            data = resp.json()
+
+        return "".join(b["text"] for b in data.get("content", []) if b.get("type") == "text")
+
+    raise ValueError("Claude API failed after retries")
 
 
 async def _call_gemini(system: str, user_message: str) -> str:
     """Call the Gemini API and return the text response, with retry for transient errors."""
     max_retries = 3
     for attempt in range(max_retries):
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=180) as client:
             resp = await client.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{config.gemini_model}:generateContent",
                 params={"key": config.gemini_api_key},

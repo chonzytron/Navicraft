@@ -67,10 +67,13 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Popularity enrichment — runs every 10 minutes until all tracks are scored
+    # Popularity enrichment — runs every 2 minutes until all tracks are scored.
+    # Each batch is 500 tracks. With the two-phase pipeline (Last.fm at 5 req/s,
+    # then MusicBrainz at 1 req/s only for non-popular tracks), this keeps
+    # enrichment running back-to-back with minimal gaps.
     _scheduler.add_job(
         _scheduled_enrichment,
-        trigger=IntervalTrigger(minutes=10),
+        trigger=IntervalTrigger(minutes=2),
         id="popularity_enrichment",
         name="Popularity enrichment",
         replace_existing=True,
@@ -78,7 +81,7 @@ def start_scheduler():
 
     _scheduler.start()
     logger.info(
-        "Scheduler started: scanning every %dh, enrichment every 10m",
+        "Scheduler started: scanning every %dh, enrichment every 2m",
         config.scan_interval_hours,
     )
 

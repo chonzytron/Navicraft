@@ -160,6 +160,33 @@ async def library_search(q: str = Query(..., min_length=1)):
 # Popularity
 # =========================================================================
 
+_enrichment_running = False
+
+
+@app.post("/api/popularity/enrich")
+async def trigger_enrichment():
+    """Manually trigger a batch of popularity enrichment."""
+    global _enrichment_running
+    if _enrichment_running:
+        return {"status": "already_running", "message": "Enrichment is already in progress"}
+
+    with db.get_db() as conn:
+        remaining = db.count_tracks_without_popularity(conn)
+    if remaining == 0:
+        return {"status": "complete", "message": "All tracks already enriched"}
+
+    async def run():
+        global _enrichment_running
+        _enrichment_running = True
+        try:
+            await popularity.enrich_popularity(batch_size=500)
+        finally:
+            _enrichment_running = False
+
+    asyncio.create_task(run())
+    return {"status": "started", "remaining": remaining}
+
+
 @app.post("/api/popularity/re-enrich")
 async def re_enrich_popularity():
     """Reset all popularity scores and trigger re-enrichment from scratch."""
@@ -181,6 +208,7 @@ async def popularity_status():
         "enriched": enriched,
         "remaining": remaining,
         "percent": round(enriched / total * 100, 1) if total > 0 else 0,
+        "running": _enrichment_running,
     }
 
 

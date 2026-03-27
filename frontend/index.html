@@ -108,7 +108,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .btn-ghost:hover{border-color:var(--text-3);color:var(--text-2)}
 
 /* --- Enrichment indicator --- */
-.enrich-bar{display:none;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:16px;font-size:12px;font-family:var(--mono);color:var(--text-4);align-items:center;gap:8px}
+.enrich-bar{display:none;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:16px;font-size:12px;font-family:var(--mono);color:var(--text-4);align-items:center;gap:8px;cursor:pointer;transition:border-color .2s}
+.enrich-bar:hover{border-color:var(--border-hover)}
 .enrich-bar.on{display:flex}
 .enrich-fill{height:3px;background:var(--accent);border-radius:2px;transition:width .5s}
 
@@ -179,7 +180,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   </div>
 
   <!-- Enrichment Progress -->
-  <div class="enrich-bar" id="enrichBar">
+  <div class="enrich-bar" id="enrichBar" onclick="triggerEnrichment()" title="Click to start enrichment">
     <span id="enrichText">Enriching...</span>
     <div style="flex:1;background:var(--surface-3);border-radius:2px;height:3px"><div class="enrich-fill" id="enrichFill" style="width:0%"></div></div>
   </div>
@@ -539,20 +540,50 @@ function moreLikeThis(){
 let enrichTimer=null;
 function pollEnrichment(){
   if(enrichTimer)clearInterval(enrichTimer);
+  let lastEnriched=0;
   const check=async()=>{
     try{
       const s=await api('/popularity/status');
       if(s.remaining>0){
         $('#enrichBar').classList.add('on');
-        $('#enrichText').textContent=`Enriching: ${num(s.enriched)} / ${num(s.total)}`;
-        $('#enrichFill').style.width=`${s.percent}%`;
+        const pct=`${s.percent}%`;
+        if(s.running){
+          $('#enrichText').textContent=`Enriching: ${num(s.enriched)} / ${num(s.total)} (${pct})`;
+          $('#enrichBar').title='Enrichment in progress';
+        }else{
+          $('#enrichText').textContent=`${num(s.remaining)} tracks unenriched — click to start`;
+          $('#enrichBar').title='Click to start enrichment';
+        }
+        $('#enrichFill').style.width=pct;
+        // Poll faster when actively running
+        if(s.running && s.enriched!==lastEnriched){
+          lastEnriched=s.enriched;
+        }
+      }else if(s.total>0){
+        // All done — show briefly then hide
+        $('#enrichBar').classList.remove('on');
       }else{
         $('#enrichBar').classList.remove('on');
       }
     }catch{}
   };
   check();
-  enrichTimer=setInterval(check,30000);
+  enrichTimer=setInterval(check,15000);
+}
+
+async function triggerEnrichment(){
+  try{
+    const r=await api('/popularity/enrich',{method:'POST'});
+    if(r.status==='already_running'){
+      toast('Enrichment already running','info');
+    }else if(r.status==='complete'){
+      toast('All tracks already enriched','success');
+    }else{
+      toast(`Enrichment started — ${num(r.remaining)} tracks to process`,'info');
+    }
+    // Poll immediately to update UI
+    setTimeout(()=>pollEnrichment(),2000);
+  }catch(e){toast(`Enrichment failed: ${e.message}`,'error')}
 }
 
 // --- Playlist History ---

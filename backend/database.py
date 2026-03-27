@@ -240,18 +240,19 @@ def get_year_range(db: sqlite3.Connection) -> dict:
     return dict(row) if row else {"min_year": None, "max_year": None}
 
 
-def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500) -> list[dict]:
+def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
+                   max_per_artist: int = 15) -> list[dict]:
     """
     Query tracks matching AI-generated filters.
-    filters can include: genres, year_min, year_max, artists, moods, bpm_min, bpm_max
+    filters can include: genres, year_min, year_max, artists, moods, bpm_min, bpm_max,
+                         exclude_genres, exclude_artists, exclude_keywords
+    max_per_artist caps how many tracks any single artist can contribute (diversity).
     """
     conditions = ["title IS NOT NULL"]
     params = []
 
     if filters.get("genres"):
         genres = filters["genres"]
-        placeholders = ",".join("?" for _ in genres)
-        # Use LIKE for flexible genre matching
         genre_clauses = " OR ".join("LOWER(genre) LIKE ?" for _ in genres)
         conditions.append(f"({genre_clauses})")
         params.extend(f"%{g.lower()}%" for g in genres)
@@ -284,14 +285,28 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500) -> li
         conditions.append("bpm <= ?")
         params.append(filters["bpm_max"])
 
-    where = " AND ".join(conditions)
-    params.append(limit)
+    # Negative filters — exclude genres, artists, keywords
+    if filters.get("exclude_genres"):
+        for eg in filters["exclude_genres"]:
+            conditions.append("LOWER(genre) NOT LIKE ?")
+            params.append(f"%{eg.lower()}%")
 
-    # Sort by popularity (descending) with a random jitter to add variety.
-    # COALESCE handles tracks without popularity data (default 50 = neutral).
-    # The random offset (0-20) prevents identical results each time and
-    # lets some lesser-known tracks surface, while still heavily favoring
-    # popular tracks over obscure ones.
+    if filters.get("exclude_artists"):
+        for ea in filters["exclude_artists"]:
+            conditions.append("LOWER(artist) NOT LIKE ?")
+            params.append(f"%{ea.lower()}%")
+
+    if filters.get("exclude_keywords"):
+        for ek in filters["exclude_keywords"]:
+            conditions.append("LOWER(title) NOT LIKE ? AND LOWER(album) NOT LIKE ?")
+            params.extend([f"%{ek.lower()}%", f"%{ek.lower()}%"])
+
+    where = " AND ".join(conditions)
+
+    # Fetch more than needed to allow per-artist capping
+    fetch_limit = limit * 3
+    params.append(fetch_limit)
+
     rows = db.execute(f"""
         SELECT id, title, artist, album_artist, album, genre, year,
                duration, bpm, composer, mood, navidrome_id, file_path,
@@ -302,7 +317,21 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500) -> li
         LIMIT ?
     """, params).fetchall()
 
-    return [dict(r) for r in rows]
+    # Apply per-artist diversity cap
+    results = []
+    artist_counts: dict[str, int] = {}
+    for r in rows:
+        d = dict(r)
+        artist_key = (d.get("artist") or "").lower().strip()
+        count = artist_counts.get(artist_key, 0)
+        if count >= max_per_artist:
+            continue
+        artist_counts[artist_key] = count + 1
+        results.append(d)
+        if len(results) >= limit:
+            break
+
+    return results
 
 
 def get_tracks_by_ids(db: sqlite3.Connection, track_ids: list[int]) -> list[dict]:
@@ -362,6 +391,17 @@ def save_playlist_log(db: sqlite3.Connection, name: str, description: str,
         INSERT INTO playlists (name, description, prompt, track_ids, navidrome_id, song_count, total_duration)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (name, description, prompt, json.dumps(track_ids), navidrome_id, song_count, total_duration))
+
+
+def get_playlist_history(db: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """Get recent playlist generation history."""
+    rows = db.execute("""
+        SELECT id, name, description, prompt, song_count, total_duration, created_at, navidrome_id
+        FROM playlists
+        ORDER BY id DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --- Popularity ---

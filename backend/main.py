@@ -6,6 +6,7 @@ Main FastAPI application.
 import asyncio
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,10 @@ logger = logging.getLogger("navicraft")
 # Track ongoing scan
 _scan_lock = asyncio.Lock()
 _scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": ""}
+
+# Rate limiting for /api/generate
+_last_generate_time = 0.0
+_GENERATE_COOLDOWN = 10  # seconds
 
 
 @asynccontextmanager
@@ -229,6 +234,12 @@ async def scan_status():
 @app.post("/api/generate")
 async def generate_playlist(req: GenerateRequest):
     """Generate a playlist using the two-pass AI strategy. Streams SSE progress events."""
+    global _last_generate_time
+    now = time.time()
+    if now - _last_generate_time < _GENERATE_COOLDOWN:
+        remaining = int(_GENERATE_COOLDOWN - (now - _last_generate_time))
+        raise HTTPException(429, detail=f"Please wait {remaining}s before generating again")
+    _last_generate_time = now
 
     # Check we have indexed songs
     with db.get_db() as conn:
@@ -310,6 +321,7 @@ async def generate_playlist(req: GenerateRequest):
             }
 
             # --- Auto-create ---
+            navidrome_pl_id = None
             if req.auto_create and matched_songs:
                 nd_ids = [t["navidrome_id"] for t in matched_songs if t.get("navidrome_id")]
                 if nd_ids:
@@ -318,22 +330,29 @@ async def generate_playlist(req: GenerateRequest):
                         pl = await navidrome.create_playlist(result["name"], nd_ids)
                         result["created"] = True
                         result["navidrome_id"] = pl["id"]
-                        with db.get_db() as conn:
-                            db.save_playlist_log(
-                                conn,
-                                name=result["name"],
-                                description=result["description"],
-                                prompt=req.prompt,
-                                track_ids=[t["id"] for t in matched_songs],
-                                navidrome_id=pl["id"],
-                                song_count=len(matched_songs),
-                                total_duration=total_duration,
-                            )
+                        navidrome_pl_id = pl["id"]
                     except Exception as e:
                         logger.warning("Auto-create failed: %s", e)
                         result["auto_create_error"] = str(e)
                 else:
                     result["auto_create_error"] = "No Navidrome IDs matched. Run a Navidrome sync."
+
+            # Always log to playlist history
+            if matched_songs:
+                try:
+                    with db.get_db() as conn:
+                        db.save_playlist_log(
+                            conn,
+                            name=result["name"],
+                            description=result["description"],
+                            prompt=req.prompt,
+                            track_ids=[t["id"] for t in matched_songs],
+                            navidrome_id=navidrome_pl_id or "",
+                            song_count=len(matched_songs),
+                            total_duration=total_duration,
+                        )
+                except Exception as e:
+                    logger.warning("Failed to save playlist history: %s", e)
 
             yield sse("result", result)
 
@@ -365,6 +384,13 @@ async def list_playlists():
         return await navidrome.get_playlists()
     except Exception as e:
         raise HTTPException(502, detail=str(e))
+
+
+@app.get("/api/playlists/history")
+async def playlist_history():
+    """Get local playlist generation history."""
+    with db.get_db() as conn:
+        return db.get_playlist_history(conn)
 
 
 @app.delete("/api/playlists/{playlist_id}")

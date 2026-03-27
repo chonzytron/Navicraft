@@ -327,10 +327,13 @@ async def enrich_popularity(batch_size: int = 200):
                 lastfm_result = await _lookup_lastfm(client, artist, title)
                 await asyncio.sleep(LASTFM_DELAY)
 
-            # Source 2: MusicBrainz
-            # Always query — even if Last.fm has data, MB release count adds value
-            mb_result = await _lookup_musicbrainz(client, artist, title)
-            await asyncio.sleep(MB_DELAY)
+            # Source 2: MusicBrainz — skip if Last.fm already has high-confidence data
+            # (100k+ listeners). This cuts enrichment time nearly in half for popular tracks.
+            skip_mb = (lastfm_result and lastfm_result.get("listeners", 0) >= 100_000)
+            mb_result = None
+            if not skip_mb:
+                mb_result = await _lookup_musicbrainz(client, artist, title)
+                await asyncio.sleep(MB_DELAY)
 
             # Blend all sources
             popularity = _blend_scores(lastfm_result, mb_result, track_number)

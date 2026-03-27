@@ -35,6 +35,9 @@ Respond ONLY with a JSON object (no markdown, no backticks):
   "bpm_min": null,
   "bpm_max": null,
   "keywords": ["keyword1", "keyword2"],
+  "exclude_genres": [],
+  "exclude_artists": [],
+  "exclude_keywords": [],
   "reasoning": "Brief explanation of your filter choices"
 }
 
@@ -45,6 +48,9 @@ Rules:
 - moods: include if mood tags might exist (e.g. "chill", "energetic", "melancholy", "dark", "uplifting")
 - bpm: set range if tempo matters (workout=120-160, chill=60-100, etc). Use null otherwise.
 - keywords: additional terms that might appear in song titles, comments, or album names
+- exclude_genres: if the prompt says "NOT" or "no" or "without" a genre, put it here (e.g. "jazz but NOT smooth jazz" → exclude_genres: ["smooth jazz"])
+- exclude_artists: if the prompt explicitly excludes artists, put them here
+- exclude_keywords: if the prompt excludes specific themes or words, put them here
 - Cast a WIDE net — it's better to include too many candidates than too few. The second pass will refine.
 """
 

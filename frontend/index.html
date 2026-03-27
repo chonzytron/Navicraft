@@ -527,7 +527,7 @@ async function savePlaylist(){
 
 // --- Export .m3u ---
 async function exportM3U(){
-  if(!currentResult||!currentResult.songs.length)return;
+  if(!currentResult||!currentResult.songs.length){toast('No songs to export','error');return}
   try{
     const resp=await fetch('/api/export/m3u',{
       method:'POST',

@@ -2,19 +2,26 @@
 Multi-source popularity enrichment for tracks.
 
 Sources (weighted by data quality):
-1. Last.fm — listener count + playcount (real-world usage from millions of users)
-2. MusicBrainz — community ratings + release count (how many compilations/releases)
-3. Track position heuristic — early album tracks (1-3) are more likely singles/hits
+1. Spotify — popularity score (0-100) from real streaming data (best signal)
+2. Last.fm — listener count + playcount (real-world usage from millions of users)
+3. MusicBrainz — community ratings + release count (how many compilations/releases)
+4. Track position heuristic — early album tracks (1-3) are more likely singles/hits
 
 Scoring philosophy:
 - Each source contributes a weighted sub-score based on how much data it has
 - More data points = higher confidence = higher weight in the blend
 - Unknown tracks get a neutral baseline (50) so they're not buried
+
+Pipeline strategy:
+- Phase 1: Spotify + Last.fm lookups concurrently (both fast, ~5-30 req/s)
+- Phase 2: MusicBrainz only for tracks not well-covered by Phase 1 (1 req/s)
 """
 
 import asyncio
+import base64
 import logging
 import math
+import time
 import httpx
 
 import database as db
@@ -30,6 +37,90 @@ MB_DELAY = 1.1  # seconds between requests
 # --- Last.fm ---
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 LASTFM_DELAY = 0.25  # 5 req/sec allowed
+
+# --- Spotify ---
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
+SPOTIFY_DELAY = 0.05  # ~20 req/s is safe with client credentials
+
+# Spotify token cache
+_spotify_token: str | None = None
+_spotify_token_expires: float = 0
+
+
+async def _get_spotify_token(client: httpx.AsyncClient) -> str | None:
+    """Get or refresh Spotify access token using Client Credentials flow."""
+    global _spotify_token, _spotify_token_expires
+
+    if _spotify_token and time.time() < _spotify_token_expires - 60:
+        return _spotify_token
+
+    try:
+        auth = base64.b64encode(
+            f"{config.spotify_client_id}:{config.spotify_client_secret}".encode()
+        ).decode()
+        resp = await client.post(
+            SPOTIFY_TOKEN_URL,
+            headers={
+                "Authorization": f"Basic {auth}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={"grant_type": "client_credentials"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _spotify_token = data["access_token"]
+        _spotify_token_expires = time.time() + data.get("expires_in", 3600)
+        logger.info("Spotify token acquired (expires in %ds)", data.get("expires_in", 3600))
+        return _spotify_token
+    except Exception as e:
+        logger.warning("Spotify token acquisition failed: %s", e)
+        return None
+
+
+async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
+                          token: str) -> dict | None:
+    """
+    Look up a track on Spotify. Returns the popularity score (0-100).
+    """
+    try:
+        # Clean up title for search (remove "Live", "Remaster", etc. for better matching)
+        query = f"track:{title} artist:{artist}"
+        resp = await client.get(
+            SPOTIFY_SEARCH_URL,
+            params={"q": query, "type": "track", "limit": 3},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 2))
+            await asyncio.sleep(retry_after)
+            return None
+        if resp.status_code == 401:
+            # Token expired — will be refreshed on next batch
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+
+        tracks = data.get("tracks", {}).get("items", [])
+        if not tracks:
+            return None
+
+        # Find best match — prefer exact artist match
+        artist_lower = artist.lower()
+        for track in tracks:
+            track_artists = [a["name"].lower() for a in track.get("artists", [])]
+            if any(artist_lower in a or a in artist_lower for a in track_artists):
+                return {"popularity": track.get("popularity", 0)}
+
+        # Fallback to first result
+        return {"popularity": tracks[0].get("popularity", 0)}
+
+    except (httpx.HTTPStatusError, ValueError, KeyError) as e:
+        logger.debug("Spotify lookup failed for '%s - %s': %s", artist, title, e)
+        return None
+    except Exception as e:
+        logger.debug("Spotify error for '%s - %s': %s", artist, title, e)
+        return None
 
 
 async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:
@@ -121,6 +212,33 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
     except Exception as e:
         logger.debug("MusicBrainz error for '%s - %s': %s", artist, title, e)
         return None
+
+
+def _spotify_score(spotify: dict) -> tuple[float, float]:
+    """
+    Derive a score (0-100) and confidence (0-1) from Spotify data.
+
+    Spotify popularity is already 0-100 and based on real streaming data,
+    so it's the most reliable signal. We use it nearly as-is.
+    """
+    pop = spotify.get("popularity", 0)
+    if pop <= 0:
+        return 0.0, 0.1  # Track exists on Spotify but has ~0 plays
+
+    # Spotify popularity is already well-calibrated
+    score = float(pop)
+
+    # High confidence for any Spotify data — it's the best signal
+    if pop >= 50:
+        confidence = 1.0
+    elif pop >= 20:
+        confidence = 0.9
+    elif pop >= 5:
+        confidence = 0.7
+    else:
+        confidence = 0.5
+
+    return score, confidence
 
 
 def _lastfm_score(lastfm: dict) -> tuple[float, float]:
@@ -246,16 +364,20 @@ def _track_position_bonus(track_number: int | None) -> int:
     return 0
 
 
-def _blend_scores(lastfm: dict | None, mb: dict | None,
+def _blend_scores(spotify: dict | None, lastfm: dict | None, mb: dict | None,
                   track_number: int | None) -> int:
     """
     Combine all sources into a single 0-100 score.
 
     Strategy: weighted average where each source's weight is its confidence.
-    If both sources have high confidence, both contribute.
+    If multiple sources have high confidence, all contribute.
     If only one has data, it dominates. Unknown tracks get baseline 50.
     """
     scores_and_weights = []
+
+    if spotify and spotify.get("popularity", 0) > 0:
+        sp_score, sp_conf = _spotify_score(spotify)
+        scores_and_weights.append((sp_score, sp_conf))
 
     if lastfm and lastfm.get("listeners", 0) > 0:
         lfm_score, lfm_conf = _lastfm_score(lastfm)
@@ -285,17 +407,14 @@ def _blend_scores(lastfm: dict | None, mb: dict | None,
 async def enrich_popularity(batch_size: int = 500):
     """
     Fetch popularity scores for tracks that don't have one yet.
-    Uses Last.fm (if API key configured) + MusicBrainz + track position.
 
-    Pipeline strategy (when Last.fm is configured):
-    1. Pre-fetch Last.fm data for the whole batch at 5 req/s (~0.25s each)
-    2. For tracks where Last.fm has 100k+ listeners, skip MusicBrainz entirely
-    3. For remaining tracks, query MusicBrainz at 1 req/s
-
-    This is ~3-5x faster than sequential lookups because:
-    - Last.fm phase: 500 tracks * 0.25s = ~2 min (vs ~2 min embedded in sequential)
-    - MB phase: only runs for tracks that need it, at 1 req/s
-    - Popular tracks (100k+ listeners) skip MB entirely
+    Pipeline:
+    - Phase 1: Spotify + Last.fm lookups for the whole batch (both fast)
+      Spotify: ~20 req/s, Last.fm: ~5 req/s — run sequentially per track
+      but both are fast so the batch completes in a few minutes
+    - Phase 2: MusicBrainz only for tracks not well-covered by Phase 1
+      (no Spotify hit AND no strong Last.fm data). 1 req/s — slow but
+      only runs for tracks that actually need it.
     """
     with db.get_db() as conn:
         tracks = db.get_tracks_without_popularity(conn, limit=batch_size)
@@ -307,10 +426,15 @@ async def enrich_popularity(batch_size: int = 500):
     logger.info("Popularity: enriching %d tracks", len(tracks))
 
     has_lastfm = bool(config.lastfm_api_key)
+    has_spotify = bool(config.spotify_client_id and config.spotify_client_secret)
+
+    sources = []
+    if has_spotify:
+        sources.append("Spotify")
     if has_lastfm:
-        logger.info("Popularity: Phase 1 — Last.fm lookups (5 req/s)")
-    else:
-        logger.info("Popularity: using MusicBrainz only (set LASTFM_API_KEY for better results)")
+        sources.append("Last.fm")
+    sources.append("MusicBrainz (fallback)")
+    logger.info("Popularity: sources — %s", " + ".join(sources))
 
     enriched = 0
     skipped = 0
@@ -319,9 +443,35 @@ async def enrich_popularity(batch_size: int = 500):
         timeout=15,
         headers={"User-Agent": MB_USER_AGENT, "Accept": "application/json"},
     ) as client:
-        # Phase 1: Batch Last.fm lookups (fast — 5 req/s)
+        # Get Spotify token if configured
+        spotify_token = None
+        if has_spotify:
+            spotify_token = await _get_spotify_token(client)
+            if not spotify_token:
+                logger.warning("Popularity: Spotify token failed, continuing without Spotify")
+
+        # Phase 1: Spotify + Last.fm lookups (fast)
+        spotify_results: dict[int, dict | None] = {}
         lastfm_results: dict[int, dict | None] = {}
+
+        if spotify_token:
+            logger.info("Popularity: Phase 1a — Spotify lookups (~20 req/s)")
+            for track in tracks:
+                artist = track.get("artist", "")
+                title = track.get("title", "")
+                if artist and title:
+                    spotify_results[track["id"]] = await _lookup_spotify(
+                        client, artist, title, spotify_token
+                    )
+                    await asyncio.sleep(SPOTIFY_DELAY)
+                else:
+                    spotify_results[track["id"]] = None
+
+            sp_hits = sum(1 for v in spotify_results.values() if v and v.get("popularity", 0) > 0)
+            logger.info("Popularity: Spotify done — %d/%d hits", sp_hits, len(tracks))
+
         if has_lastfm:
+            logger.info("Popularity: Phase 1b — Last.fm lookups (5 req/s)")
             for track in tracks:
                 artist = track.get("artist", "")
                 title = track.get("title", "")
@@ -332,10 +482,9 @@ async def enrich_popularity(batch_size: int = 500):
                     lastfm_results[track["id"]] = None
 
             lfm_hits = sum(1 for v in lastfm_results.values() if v and v.get("listeners", 0) > 0)
-            lfm_strong = sum(1 for v in lastfm_results.values() if v and v.get("listeners", 0) >= 100_000)
-            logger.info("Popularity: Last.fm done — %d hits, %d strong (skipping MB for those)", lfm_hits, lfm_strong)
+            logger.info("Popularity: Last.fm done — %d/%d hits", lfm_hits, len(tracks))
 
-        # Phase 2: MusicBrainz lookups for tracks that need it (1 req/s)
+        # Phase 2: MusicBrainz for tracks not well-covered by Phase 1
         needs_mb_count = 0
         for track in tracks:
             artist = track.get("artist", "")
@@ -348,18 +497,22 @@ async def enrich_popularity(batch_size: int = 500):
                 skipped += 1
                 continue
 
+            spotify_result = spotify_results.get(track["id"])
             lastfm_result = lastfm_results.get(track["id"])
 
-            # Skip MB if Last.fm has high-confidence data
+            # Skip MB if we already have good data from Spotify or Last.fm
+            has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
+            has_good_lastfm = (lastfm_result and lastfm_result.get("listeners", 0) >= 100_000)
+            skip_mb = has_good_spotify or has_good_lastfm
+
             mb_result = None
-            skip_mb = (lastfm_result and lastfm_result.get("listeners", 0) >= 100_000)
             if not skip_mb:
                 mb_result = await _lookup_musicbrainz(client, artist, title)
                 await asyncio.sleep(MB_DELAY)
                 needs_mb_count += 1
 
             # Blend all sources
-            popularity = _blend_scores(lastfm_result, mb_result, track_number)
+            popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track_number)
 
             # Store results
             with db.get_db() as conn:
@@ -371,6 +524,7 @@ async def enrich_popularity(batch_size: int = 500):
                     mb_result.get("mb_rating_count", 0) if mb_result else 0,
                     lastfm_result.get("listeners") if lastfm_result else None,
                     lastfm_result.get("playcount") if lastfm_result else None,
+                    spotify_result.get("popularity") if spotify_result else None,
                 )
             enriched += 1
 

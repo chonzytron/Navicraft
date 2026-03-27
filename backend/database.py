@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     mb_rating       REAL,
     mb_rating_count INTEGER DEFAULT 0,
     lastfm_listeners INTEGER,
-    lastfm_playcount INTEGER
+    lastfm_playcount INTEGER,
+    spotify_popularity INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
@@ -95,6 +96,7 @@ def _migrate(conn: sqlite3.Connection):
         ("mb_rating_count", "INTEGER DEFAULT 0"),
         ("lastfm_listeners", "INTEGER"),
         ("lastfm_playcount", "INTEGER"),
+        ("spotify_popularity", "INTEGER"),
     ]
     for col, typ in migrations:
         if col not in columns:
@@ -451,14 +453,15 @@ def reset_popularity(db: sqlite3.Connection):
 def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
                       mb_rating: float | None, mb_rating_count: int,
                       lastfm_listeners: int | None = None,
-                      lastfm_playcount: int | None = None):
+                      lastfm_playcount: int | None = None,
+                      spotify_popularity: int | None = None):
     """Update popularity data for a track."""
     db.execute("""
         UPDATE tracks
         SET popularity = ?, mb_rating = ?, mb_rating_count = ?,
-            lastfm_listeners = ?, lastfm_playcount = ?
+            lastfm_listeners = ?, lastfm_playcount = ?, spotify_popularity = ?
         WHERE id = ?
     """, (popularity, mb_rating, mb_rating_count,
-          lastfm_listeners, lastfm_playcount, track_id))
+          lastfm_listeners, lastfm_playcount, spotify_popularity, track_id))
 
 

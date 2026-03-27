@@ -97,6 +97,7 @@ class GenerateRequest(BaseModel):
     max_songs: int = Field(default=25, ge=5, le=100)
     target_duration_min: Optional[int] = Field(default=None, ge=5, le=600, description="Target duration in minutes")
     auto_create: bool = Field(default=False)
+    provider: Optional[str] = Field(default=None, description="AI provider override: 'claude' or 'gemini'")
 
 
 class CreatePlaylistRequest(BaseModel):
@@ -111,6 +112,17 @@ class CreatePlaylistRequest(BaseModel):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "ai_provider": config.ai_provider}
+
+
+@app.get("/api/ai/providers")
+async def ai_providers():
+    """Return which AI providers are configured and the active default."""
+    available = []
+    if config.claude_api_key:
+        available.append({"id": "claude", "name": "Claude", "model": config.claude_model})
+    if config.gemini_api_key:
+        available.append({"id": "gemini", "name": "Gemini", "model": config.gemini_model})
+    return {"available": available, "default": config.ai_provider}
 
 
 @app.get("/api/navidrome/test")
@@ -294,7 +306,7 @@ async def generate_playlist(req: GenerateRequest):
                     "year_range": db.get_year_range(conn),
                 }
 
-            filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary)
+            filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary, req.provider)
             yield sse("progress", {"phase": "filtering", "message": "Searching library..."})
 
             # --- Filter candidates ---
@@ -321,6 +333,7 @@ async def generate_playlist(req: GenerateRequest):
                 candidates=candidates,
                 max_songs=req.max_songs,
                 target_duration_min=req.target_duration_min,
+                provider=req.provider,
             )
 
             yield sse("progress", {"phase": "matching", "message": "Building playlist..."})

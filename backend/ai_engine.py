@@ -182,9 +182,9 @@ async def _call_gemini(system: str, user_message: str) -> str:
     raise ValueError("Gemini API failed after retries")
 
 
-async def _call_ai(system: str, user_message: str) -> str:
-    """Route to configured AI provider."""
-    provider = config.ai_provider.lower()
+async def _call_ai(system: str, user_message: str, provider: str | None = None) -> str:
+    """Route to configured AI provider. Optional provider overrides config."""
+    provider = (provider or config.ai_provider).lower()
     if provider == "claude":
         if not config.claude_api_key:
             raise ValueError("CLAUDE_API_KEY is not set")
@@ -197,7 +197,7 @@ async def _call_ai(system: str, user_message: str) -> str:
         raise ValueError(f"Unknown AI provider: {provider}")
 
 
-async def pass1_extract_intent(prompt: str, library_summary: dict) -> dict:
+async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str | None = None) -> dict:
     """
     Pass 1: Extract search filters from the user's prompt.
     library_summary should contain: genres, top_artists, year_range
@@ -213,8 +213,8 @@ User's playlist prompt: "{prompt}"
 
 Extract the search filters to find candidate songs."""
 
-    logger.info("Pass 1: extracting intent from prompt")
-    text = await _call_ai(PASS1_SYSTEM, user_msg)
+    logger.info("Pass 1: extracting intent from prompt (provider: %s)", provider or config.ai_provider)
+    text = await _call_ai(PASS1_SYSTEM, user_msg, provider)
     filters = _parse_json(text)
     logger.info("Pass 1 result: %s", json.dumps(filters, indent=2))
     return filters
@@ -224,6 +224,7 @@ async def pass2_select_songs(
     prompt: str,
     candidates: list[dict],
     max_songs: int,
+    provider: str | None = None,
     target_duration_min: int = None,
 ) -> dict:
     """
@@ -262,7 +263,7 @@ Candidates:
 {chr(10).join(candidate_lines)}"""
 
     logger.info("Pass 2: selecting from %d candidates (max %d songs)", len(candidates), max_songs)
-    text = await _call_ai(PASS2_SYSTEM, user_msg)
+    text = await _call_ai(PASS2_SYSTEM, user_msg, provider)
     try:
         result = _parse_json(text)
     except (json.JSONDecodeError, ValueError):

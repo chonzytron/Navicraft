@@ -128,6 +128,20 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .hist-btn-del{padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-4);transition:all .15s;flex-shrink:0;line-height:1}
 .hist-btn-del:hover{border-color:var(--red);color:var(--red)}
 
+/* --- Provider selector --- */
+.pvd-wrap{display:none;align-items:center;gap:8px}
+.pvd-wrap.on{display:flex}
+.pvd-label{font-size:12px;color:var(--text-4);font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px;white-space:nowrap}
+.pvd-pills{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;gap:2px}
+.pvd-btn{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:4px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;color:var(--text-3);background:transparent;border:none;transition:all .2s;white-space:nowrap}
+.pvd-btn:hover{color:var(--text-2)}
+.pvd-btn.on{background:var(--surface-3);color:var(--text);box-shadow:0 1px 4px #0006}
+.pvd-btn svg{flex-shrink:0;transition:opacity .2s}
+.pvd-btn:not(.on) svg{opacity:.45}
+.pvd-btn.on.pvd-claude svg{color:#e8a87c}
+.pvd-btn.on.pvd-gemini svg{color:#7ab4ff}
+.pvd-model{font-family:var(--mono);font-size:10px;color:var(--text-4);margin-left:2px;opacity:.7}
+
 /* --- Scan bar --- */
 .scan-bar{display:none;padding:12px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:24px;font-size:13px;color:var(--text-3)}
 .scan-bar.on{display:flex;align-items:center;gap:10px}
@@ -205,6 +219,28 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
           <div class="toggle-track" id="autoToggle"></div>
           <span>Save without preview</span>
         </label>
+        <div class="pvd-wrap" id="pvdWrap">
+          <span class="pvd-label">AI</span>
+          <div class="pvd-pills">
+            <button class="pvd-btn pvd-claude" id="pvdClaude" onclick="setProvider('claude')">
+              <!-- Anthropic-style mark: simplified triangle A -->
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                <path d="M8 1.5L14.2 13.5H1.8L8 1.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                <path d="M5.2 10.5H10.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+              Claude
+              <span class="pvd-model" id="pvdClaudeModel"></span>
+            </button>
+            <button class="pvd-btn pvd-gemini" id="pvdGemini" onclick="setProvider('gemini')">
+              <!-- Gemini 4-point star -->
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 1C8 1 6.8 5.8 5.5 7.1 4.2 8.4 1 8 1 8 1 8 4.2 7.6 5.5 8.9 6.8 10.2 8 15 8 15 8 15 9.2 10.2 10.5 8.9 11.8 7.6 15 8 15 8 15 8 11.8 8.4 10.5 7.1 9.2 5.8 8 1 8 1Z"/>
+              </svg>
+              Gemini
+              <span class="pvd-model" id="pvdGeminiModel"></span>
+            </button>
+          </div>
+        </div>
       </div>
       <button class="btn-gen" id="genBtn" onclick="generate()">Generate</button>
     </div>
@@ -252,6 +288,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // --- State ---
 let currentResult = null;
 let scanPollTimer = null;
+let activeProvider = null; // null = use server default
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -284,9 +321,37 @@ async function api(path,opts={},timeoutMs=300000){
 // --- Init ---
 async function init(){
   loadStats();
+  loadProviders();
   pollScan();
   pollEnrichment();
   loadHistory();
+}
+
+// --- AI Provider selector ---
+async function loadProviders(){
+  try{
+    const p=await api('/ai/providers');
+    if(p.available.length<2)return; // only show when there's a real choice
+    // populate model labels
+    p.available.forEach(pv=>{
+      if(pv.id==='claude'){
+        const m=pv.model.replace('claude-','').replace(/-\d{8}$/,'');
+        $('#pvdClaudeModel').textContent=m;
+      }
+      if(pv.id==='gemini'){
+        const m=pv.model.replace('gemini-','');
+        $('#pvdGeminiModel').textContent=m;
+      }
+    });
+    setProvider(p.default);
+    $('#pvdWrap').classList.add('on');
+  }catch{}
+}
+
+function setProvider(id){
+  activeProvider=id;
+  $('#pvdClaude').classList.toggle('on',id==='claude');
+  $('#pvdGemini').classList.toggle('on',id==='gemini');
 }
 
 async function loadStats(){
@@ -371,6 +436,7 @@ async function generate(){
 
   const body={prompt,max_songs:maxSongs,auto_create:autoCreate};
   if(targetMin)body.target_duration_min=targetMin;
+  if(activeProvider)body.provider=activeProvider;
 
   let startTime=Date.now();
   let elapsed;

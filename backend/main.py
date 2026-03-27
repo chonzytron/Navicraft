@@ -152,6 +152,34 @@ async def library_search(q: str = Query(..., min_length=1)):
 
 
 # =========================================================================
+# Popularity
+# =========================================================================
+
+@app.post("/api/popularity/re-enrich")
+async def re_enrich_popularity():
+    """Reset all popularity scores and trigger re-enrichment from scratch."""
+    with db.get_db() as conn:
+        count = db.reset_popularity(conn)
+    # The scheduler will pick up the un-enriched tracks automatically
+    return {"status": "reset", "tracks_to_enrich": count, "message": "Scores reset. Background enrichment will re-process all tracks."}
+
+
+@app.get("/api/popularity/status")
+async def popularity_status():
+    """Check how many tracks still need popularity enrichment."""
+    with db.get_db() as conn:
+        remaining = db.count_tracks_without_popularity(conn)
+        total = db.execute_count(conn, "SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL")
+    enriched = total - remaining
+    return {
+        "total": total,
+        "enriched": enriched,
+        "remaining": remaining,
+        "percent": round(enriched / total * 100, 1) if total > 0 else 0,
+    }
+
+
+# =========================================================================
 # Scanning
 # =========================================================================
 

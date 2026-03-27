@@ -287,13 +287,18 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500) -> li
     where = " AND ".join(conditions)
     params.append(limit)
 
+    # Sort by popularity (descending) with a random jitter to add variety.
+    # COALESCE handles tracks without popularity data (default 50 = neutral).
+    # The random offset (0-20) prevents identical results each time and
+    # lets some lesser-known tracks surface, while still heavily favoring
+    # popular tracks over obscure ones.
     rows = db.execute(f"""
         SELECT id, title, artist, album_artist, album, genre, year,
                duration, bpm, composer, mood, navidrome_id, file_path,
                popularity
         FROM tracks
         WHERE {where}
-        ORDER BY RANDOM()
+        ORDER BY (COALESCE(popularity, 50) + ABS(RANDOM()) % 20) DESC
         LIMIT ?
     """, params).fetchall()
 
@@ -373,12 +378,28 @@ def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> l
     return [dict(r) for r in rows]
 
 
+def execute_count(db: sqlite3.Connection, sql: str) -> int:
+    """Execute a COUNT query and return the result."""
+    row = db.execute(sql).fetchone()
+    return row["cnt"]
+
+
 def count_tracks_without_popularity(db: sqlite3.Connection) -> int:
     """Count tracks without popularity data."""
     row = db.execute(
         "SELECT COUNT(*) as cnt FROM tracks WHERE popularity IS NULL AND title IS NOT NULL"
     ).fetchone()
     return row["cnt"]
+
+
+def reset_popularity(db: sqlite3.Connection):
+    """Reset all popularity scores so they can be re-enriched."""
+    db.execute("""
+        UPDATE tracks SET popularity = NULL, mb_rating = NULL,
+               mb_rating_count = 0, lastfm_listeners = NULL, lastfm_playcount = NULL
+    """)
+    count = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL").fetchone()["cnt"]
+    return count
 
 
 def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,

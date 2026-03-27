@@ -45,7 +45,7 @@ CLAUDE_MODEL="claude-sonnet-4-20250514"
 
 # Gemini (Google) — required if AI_PROVIDER=gemini
 GEMINI_API_KEY=""
-GEMINI_MODEL="gemini-2.0-flash"
+GEMINI_MODEL="gemini-2.5-flash"
 
 # Last.fm API key (optional — improves popularity scoring)
 # Get a free key at https://www.last.fm/api/account/create

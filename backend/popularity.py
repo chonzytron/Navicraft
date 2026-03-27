@@ -499,9 +499,9 @@ async def enrich_popularity(batch_size: int = 500):
                         lastfm_result = await _lookup_lastfm(client, artist, title)
                         await asyncio.sleep(LASTFM_DELAY)
 
-                    # MusicBrainz — only when Spotify/Last.fm don't have good coverage
+                    # MusicBrainz — only when neither Spotify nor Last.fm returned anything
                     has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
-                    has_good_lastfm = (lastfm_result and lastfm_result.get("listeners", 0) >= 100_000)
+                    has_good_lastfm = bool(lastfm_result and lastfm_result.get("listeners") is not None)
                     mb_result = None
                     if not (has_good_spotify or has_good_lastfm):
                         mb_result = await _lookup_musicbrainz(client, artist, title)

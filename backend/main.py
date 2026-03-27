@@ -393,8 +393,19 @@ async def playlist_history():
         return db.get_playlist_history(conn)
 
 
+@app.delete("/api/playlists/history/{history_id}")
+async def delete_playlist_history(history_id: int):
+    """Delete a playlist from local generation history."""
+    with db.get_db() as conn:
+        deleted = db.delete_playlist_log(conn, history_id)
+    if not deleted:
+        raise HTTPException(404, detail="Playlist not found in history")
+    return {"status": "deleted"}
+
+
 @app.delete("/api/playlists/{playlist_id}")
 async def delete_playlist(playlist_id: str):
+    """Delete a playlist from Navidrome."""
     try:
         await navidrome.delete_playlist(playlist_id)
         return {"status": "deleted"}

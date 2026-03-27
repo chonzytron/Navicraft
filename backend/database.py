@@ -404,6 +404,12 @@ def get_playlist_history(db: sqlite3.Connection, limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def delete_playlist_log(db: sqlite3.Connection, playlist_id: int) -> bool:
+    """Delete a playlist from local history. Returns True if a row was deleted."""
+    cur = db.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+    return cur.rowcount > 0
+
+
 # --- Popularity ---
 
 def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> list[dict]:

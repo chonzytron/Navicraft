@@ -81,7 +81,8 @@ async def _get_spotify_token(client: httpx.AsyncClient) -> str | None:
 async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
                           token: str) -> dict | None:
     """
-    Look up a track on Spotify. Returns the popularity score (0-100).
+    Look up a track on Spotify. Returns the popularity score (0-100),
+    or {"rate_limited": True} if the API is throttling us.
     Retries once on 429 after honoring Retry-After.
     """
     for attempt in range(2):
@@ -121,7 +122,8 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
             logger.debug("Spotify error for '%s - %s': %s", artist, title, e)
             return None
 
-    return None
+    # Both attempts were 429 — signal rate limiting to caller
+    return {"rate_limited": True}
 
 
 async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:
@@ -458,6 +460,9 @@ async def enrich_popularity(batch_size: int = 500):
             if not spotify_token:
                 logger.warning("Popularity: Spotify token failed, continuing without Spotify")
 
+        spotify_consecutive_429s = 0
+        SPOTIFY_429_LIMIT = 3  # disable Spotify for batch after this many consecutive 429s
+
         for track in tracks:
             artist = track.get("artist", "")
             title = track.get("title", "")
@@ -470,8 +475,20 @@ async def enrich_popularity(batch_size: int = 500):
                 # Spotify
                 spotify_result = None
                 if spotify_token:
-                    spotify_result = await _lookup_spotify(client, artist, title, spotify_token)
+                    raw = await _lookup_spotify(client, artist, title, spotify_token)
                     await asyncio.sleep(SPOTIFY_DELAY)
+                    if raw and raw.get("rate_limited"):
+                        spotify_consecutive_429s += 1
+                        if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
+                            logger.warning(
+                                "Popularity: Spotify rate-limited %d times in a row — "
+                                "disabling for remainder of this batch",
+                                spotify_consecutive_429s,
+                            )
+                            spotify_token = None  # skip Spotify for rest of batch
+                    else:
+                        spotify_consecutive_429s = 0
+                        spotify_result = raw
 
                 # Last.fm
                 lastfm_result = None

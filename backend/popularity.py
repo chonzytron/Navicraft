@@ -86,47 +86,41 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
     """
     Look up a track on Spotify. Returns the popularity score (0-100),
     or {"rate_limited": True} if the API is throttling us.
-    Retries once on 429 after honoring Retry-After.
+    Does NOT sleep/retry on 429 — the caller tracks consecutive hits
+    and disables Spotify for the batch after SPOTIFY_429_LIMIT misses.
     """
-    for attempt in range(2):
-        try:
-            query = f"track:{title} artist:{artist}"
-            resp = await client.get(
-                SPOTIFY_SEARCH_URL,
-                params={"q": query, "type": "track", "limit": 3},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", 5))
-                logger.debug("Spotify 429 — backing off %ds", retry_after)
-                await asyncio.sleep(retry_after)
-                continue  # retry
-            if resp.status_code == 401:
-                return None
-            resp.raise_for_status()
-            data = resp.json()
-
-            tracks = data.get("tracks", {}).get("items", [])
-            if not tracks:
-                return None
-
-            artist_lower = artist.lower()
-            for track in tracks:
-                track_artists = [a["name"].lower() for a in track.get("artists", [])]
-                if any(artist_lower in a or a in artist_lower for a in track_artists):
-                    return {"popularity": track.get("popularity", 0)}
-
-            return {"popularity": tracks[0].get("popularity", 0)}
-
-        except (httpx.HTTPStatusError, ValueError, KeyError) as e:
-            logger.debug("Spotify lookup failed for '%s - %s': %s", artist, title, e)
+    try:
+        query = f"track:{title} artist:{artist}"
+        resp = await client.get(
+            SPOTIFY_SEARCH_URL,
+            params={"q": query, "type": "track", "limit": 3},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code == 429:
+            return {"rate_limited": True}
+        if resp.status_code == 401:
             return None
-        except Exception as e:
-            logger.debug("Spotify error for '%s - %s': %s", artist, title, e)
+        resp.raise_for_status()
+        data = resp.json()
+
+        tracks = data.get("tracks", {}).get("items", [])
+        if not tracks:
             return None
 
-    # Both attempts were 429 — signal rate limiting to caller
-    return {"rate_limited": True}
+        artist_lower = artist.lower()
+        for track in tracks:
+            track_artists = [a["name"].lower() for a in track.get("artists", [])]
+            if any(artist_lower in a or a in artist_lower for a in track_artists):
+                return {"popularity": track.get("popularity", 0)}
+
+        return {"popularity": tracks[0].get("popularity", 0)}
+
+    except (httpx.HTTPStatusError, ValueError, KeyError) as e:
+        logger.debug("Spotify lookup failed for '%s - %s': %s", artist, title, e)
+        return None
+    except Exception as e:
+        logger.debug("Spotify error for '%s - %s': %s", artist, title, e)
+        return None
 
 
 async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:

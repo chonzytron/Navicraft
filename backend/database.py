@@ -426,6 +426,41 @@ def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> l
     return [dict(r) for r in rows]
 
 
+def get_tracks_missing_spotify(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
+    """Get tracks that have been enriched but are missing Spotify data.
+    Returns existing Last.fm/MB values so the score can be reblended."""
+    rows = db.execute("""
+        SELECT id, title, artist, track_number,
+               lastfm_listeners, lastfm_playcount,
+               mb_rating, mb_rating_count
+        FROM tracks
+        WHERE popularity IS NOT NULL
+          AND spotify_popularity IS NULL
+          AND title IS NOT NULL
+        ORDER BY id
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_tracks_missing_spotify(db: sqlite3.Connection) -> int:
+    """Count enriched tracks that still have no Spotify data."""
+    row = db.execute("""
+        SELECT COUNT(*) as cnt FROM tracks
+        WHERE popularity IS NOT NULL AND spotify_popularity IS NULL AND title IS NOT NULL
+    """).fetchone()
+    return row["cnt"]
+
+
+def update_spotify_popularity(db: sqlite3.Connection, rows: list[tuple]):
+    """Patch Spotify + reblended popularity for tracks that already have other source data.
+    Each row: (popularity, spotify_popularity, track_id)
+    """
+    db.executemany("""
+        UPDATE tracks SET popularity = ?, spotify_popularity = ? WHERE id = ?
+    """, rows)
+
+
 def execute_count(db: sqlite3.Connection, sql: str) -> int:
     """Execute a COUNT query and return the result."""
     row = db.execute(sql).fetchone()

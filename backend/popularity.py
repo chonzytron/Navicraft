@@ -540,14 +540,84 @@ async def enrich_popularity(batch_size: int = 500):
 
             flush_pending()  # write any remaining tracks
 
+            # --- Spotify top-up pass ---
+            # If Spotify is currently working, go back and fill in tracks that were
+            # enriched without Spotify data (e.g. enriched during a prior cooldown).
+            spotify_topup = 0
+            if spotify_token and not spotify_token is None:
+                with db.get_db() as conn:
+                    missing_spotify = db.get_tracks_missing_spotify(conn, limit=batch_size)
+
+                if missing_spotify:
+                    logger.info("Popularity: Spotify top-up — %d tracks missing Spotify data", len(missing_spotify))
+                    topup_pending: list[tuple] = []
+
+                    for track in missing_spotify:
+                        if _spotify_blocked_until and time.time() >= _spotify_blocked_until:
+                            break  # rate-limited again mid-pass, stop cleanly
+
+                        artist = track.get("artist", "")
+                        title = track.get("title", "")
+                        if not artist or not title:
+                            continue
+
+                        raw = await _lookup_spotify(client, artist, title, spotify_token)
+                        await asyncio.sleep(SPOTIFY_DELAY)
+
+                        if raw and raw.get("rate_limited"):
+                            spotify_consecutive_429s += 1
+                            if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
+                                logger.warning(
+                                    "Popularity: Spotify rate-limited during top-up — "
+                                    "disabling for %ds",
+                                    SPOTIFY_COOLDOWN_SECONDS,
+                                )
+                                _spotify_blocked_until = time.time() + SPOTIFY_COOLDOWN_SECONDS
+                                break
+                            continue
+
+                        spotify_consecutive_429s = 0
+                        if raw is None:
+                            continue  # track not found on Spotify, leave as-is
+
+                        # Reblend with existing Last.fm/MB data already stored in DB
+                        lastfm_result = None
+                        if track.get("lastfm_listeners") is not None:
+                            lastfm_result = {
+                                "listeners": track["lastfm_listeners"],
+                                "playcount": track.get("lastfm_playcount"),
+                            }
+                        mb_result = None
+                        if track.get("mb_rating") is not None:
+                            mb_result = {
+                                "mb_rating": track["mb_rating"],
+                                "mb_rating_count": track.get("mb_rating_count", 0),
+                            }
+
+                        new_popularity = _blend_scores(raw, lastfm_result, mb_result, track.get("track_number"))
+                        topup_pending.append((new_popularity, raw["popularity"], track["id"]))
+                        spotify_topup += 1
+
+                        if len(topup_pending) >= WRITE_BATCH:
+                            with db.get_db() as conn:
+                                db.update_spotify_popularity(conn, topup_pending)
+                            topup_pending.clear()
+
+                    if topup_pending:
+                        with db.get_db() as conn:
+                            db.update_spotify_popularity(conn, topup_pending)
+
+                    logger.info("Popularity: Spotify top-up done — %d tracks updated", spotify_topup)
+
         # Check remaining
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
+            missing_spotify = db.count_tracks_missing_spotify(conn)
 
         logger.info(
-            "Popularity enrichment done: %d enriched, %d skipped, %d remaining",
-            enriched, skipped, remaining
+            "Popularity enrichment done: %d enriched, %d skipped, %d remaining, %d missing Spotify",
+            enriched, skipped, remaining, missing_spotify
         )
-        return {"enriched": enriched, "skipped": skipped, "total_remaining": remaining}
+        return {"enriched": enriched, "skipped": skipped, "total_remaining": remaining, "missing_spotify": missing_spotify}
     finally:
         _enrichment_lock.release()

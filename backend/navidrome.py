@@ -46,10 +46,10 @@ async def _get(endpoint: str, params: dict = None) -> dict:
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
             if attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)
-                logger.warning("Navidrome request failed (%s), retrying in %ds", e, wait)
+                logger.warning("Navidrome request failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
                 await asyncio.sleep(wait)
             else:
-                raise
+                raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
     sr = data.get("subsonic-response", {})
     if sr.get("status") != "ok":
         error = sr.get("error", {})
@@ -180,10 +180,10 @@ async def create_playlist(name: str, song_ids: list[str]) -> dict:
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
             if attempt < 2:
                 wait = 2 ** (attempt + 1)
-                logger.warning("Playlist create failed (%s), retrying in %ds", e, wait)
+                logger.warning("Playlist create failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
                 await asyncio.sleep(wait)
             else:
-                raise
+                raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
 
     sr = data.get("subsonic-response", {})
     if sr.get("status") != "ok":

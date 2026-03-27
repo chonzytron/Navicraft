@@ -15,7 +15,7 @@ class Config:
     # AI Provider: "claude" or "gemini"
     ai_provider: str = field(default_factory=lambda: os.getenv("AI_PROVIDER", "claude"))
     claude_api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY", ""))
-    claude_model: str = field(default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"))
+    claude_model: str = field(default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 

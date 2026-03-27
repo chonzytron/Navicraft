@@ -517,7 +517,7 @@ function renderResults(r){
 async function savePlaylist(){
   if(!currentResult||!currentResult.songs.length)return;
   const ndIds=currentResult.songs.map(s=>s.navidrome_id).filter(Boolean);
-  if(!ndIds.length){toast('No Navidrome IDs found — run a sync first','error');return}
+  if(!ndIds.length){toast('No Navidrome IDs — verify NAVIDROME_URL is reachable and trigger a scan','error');return}
   try{
     await api('/playlists',{method:'POST',body:JSON.stringify({name:currentResult.name,song_ids:ndIds})});
     toast('Playlist saved to Navidrome!','success');

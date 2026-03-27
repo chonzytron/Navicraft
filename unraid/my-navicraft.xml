@@ -132,12 +132,23 @@
   <Config
     Name="Gemini Model"
     Target="GEMINI_MODEL"
-    Default="gemini-2.0-flash"
+    Default="gemini-2.5-flash"
     Description="Gemini model to use"
     Type="Variable"
     Display="advanced"
     Required="false"
-    Mask="false">gemini-2.0-flash</Config>
+    Mask="false">gemini-2.5-flash</Config>
+
+  <!-- Last.fm (optional — improves popularity scoring) -->
+  <Config
+    Name="Last.fm API Key"
+    Target="LASTFM_API_KEY"
+    Default=""
+    Description="Last.fm API key for better popularity data. Get one free at https://www.last.fm/api/account/create"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
 
   <!-- Scanner Settings -->
   <Config

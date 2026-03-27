@@ -17,7 +17,7 @@ class Config:
     claude_api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY", ""))
     claude_model: str = field(default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash"))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
     # Database
     db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "/data/navicraft.db"))
@@ -27,6 +27,9 @@ class Config:
     scan_extensions: str = field(default_factory=lambda: os.getenv(
         "SCAN_EXTENSIONS", ".mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc"
     ))
+
+    # Last.fm API (optional — for popularity enrichment)
+    lastfm_api_key: str = field(default_factory=lambda: os.getenv("LASTFM_API_KEY", ""))
 
     # AI settings
     max_candidates: int = field(default_factory=lambda: int(os.getenv("MAX_CANDIDATES", "500")))

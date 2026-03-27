@@ -3,6 +3,7 @@ Navidrome integration via Subsonic API.
 Used for: playlist creation/deletion, and syncing Navidrome song IDs to the local index.
 """
 
+import asyncio
 import hashlib
 import secrets
 import logging
@@ -35,10 +36,21 @@ async def _get(endpoint: str, params: dict = None) -> dict:
     all_params = _subsonic_params()
     if params:
         all_params.update(params)
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.get(_api_url(endpoint), params=all_params)
-        resp.raise_for_status()
-        data = resp.json()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.get(_api_url(endpoint), params=all_params)
+                resp.raise_for_status()
+                data = resp.json()
+            break
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Navidrome request failed (%s), retrying in %ds", e, wait)
+                await asyncio.sleep(wait)
+            else:
+                raise
     sr = data.get("subsonic-response", {})
     if sr.get("status") != "ok":
         error = sr.get("error", {})
@@ -159,10 +171,20 @@ async def create_playlist(name: str, song_ids: list[str]) -> dict:
     for sid in song_ids:
         query_params.append(("songId", sid))
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(_api_url("createPlaylist"), params=query_params)
-        resp.raise_for_status()
-        data = resp.json()
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.get(_api_url("createPlaylist"), params=query_params)
+                resp.raise_for_status()
+                data = resp.json()
+            break
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            if attempt < 2:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Playlist create failed (%s), retrying in %ds", e, wait)
+                await asyncio.sleep(wait)
+            else:
+                raise
 
     sr = data.get("subsonic-response", {})
     if sr.get("status") != "ok":

@@ -460,6 +460,7 @@ async function generate(){
     const decoder=new TextDecoder();
     let buffer='';
     let gotResult=false;
+    let eventType=null; // persists across chunks so large payloads aren't lost
 
     while(true){
       const {done,value}=await reader.read();
@@ -469,7 +470,6 @@ async function generate(){
       // Parse SSE events from buffer
       const lines=buffer.split('\n');
       buffer=lines.pop(); // keep incomplete line in buffer
-      let eventType=null;
       for(const line of lines){
         if(line.startsWith('event: ')){
           eventType=line.slice(7).trim();

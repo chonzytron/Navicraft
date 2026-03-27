@@ -123,7 +123,7 @@ async def _call_claude(system: str, user_message: str) -> str:
                 },
                 json={
                     "model": config.claude_model,
-                    "max_tokens": 32768,
+                    "max_tokens": 8192,
                     "system": system,
                     "messages": [{"role": "user", "content": user_message}],
                 },
@@ -135,6 +135,8 @@ async def _call_claude(system: str, user_message: str) -> str:
                 await asyncio.sleep(wait)
                 continue
 
+            if resp.status_code >= 400:
+                logger.error("Claude API error %d: %s", resp.status_code, resp.text[:1000])
             resp.raise_for_status()
             data = resp.json()
 
@@ -165,6 +167,8 @@ async def _call_gemini(system: str, user_message: str) -> str:
                 await asyncio.sleep(wait)
                 continue
 
+            if resp.status_code >= 400:
+                logger.error("Gemini API error %d: %s", resp.status_code, resp.text[:1000])
             resp.raise_for_status()
             data = resp.json()
 

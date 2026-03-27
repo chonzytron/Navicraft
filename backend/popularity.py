@@ -50,6 +50,11 @@ SPOTIFY_DELAY = 0.2  # ~5 req/s — conservative to avoid 429s
 _spotify_token: str | None = None
 _spotify_token_expires: float = 0
 
+# Spotify rate-limit cooldown — set when a batch gets rate-limited,
+# skip Spotify entirely until this timestamp passes
+SPOTIFY_COOLDOWN_SECONDS = 600  # 10 minutes
+_spotify_blocked_until: float = 0
+
 
 async def _get_spotify_token(client: httpx.AsyncClient) -> str | None:
     """Get or refresh Spotify access token using Client Credentials flow."""
@@ -456,12 +461,17 @@ async def enrich_popularity(batch_size: int = 500):
             timeout=15,
             headers={"User-Agent": MB_USER_AGENT, "Accept": "application/json"},
         ) as client:
+            global _spotify_blocked_until
             # Get Spotify token if configured
             spotify_token = None
             if has_spotify:
-                spotify_token = await _get_spotify_token(client)
-                if not spotify_token:
-                    logger.warning("Popularity: Spotify token failed, continuing without Spotify")
+                if time.time() < _spotify_blocked_until:
+                    remaining_cooldown = int(_spotify_blocked_until - time.time())
+                    logger.info("Popularity: Spotify in cooldown for %ds more — skipping this batch", remaining_cooldown)
+                else:
+                    spotify_token = await _get_spotify_token(client)
+                    if not spotify_token:
+                        logger.warning("Popularity: Spotify token failed, continuing without Spotify")
 
             spotify_consecutive_429s = 0
             SPOTIFY_429_LIMIT = 3  # disable Spotify for batch after this many consecutive 429s
@@ -485,9 +495,11 @@ async def enrich_popularity(batch_size: int = 500):
                             if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
                                 logger.warning(
                                     "Popularity: Spotify rate-limited %d times in a row — "
-                                    "disabling for remainder of this batch",
+                                    "disabling for %ds then retrying",
                                     spotify_consecutive_429s,
+                                    SPOTIFY_COOLDOWN_SECONDS,
                                 )
+                                _spotify_blocked_until = time.time() + SPOTIFY_COOLDOWN_SECONDS
                                 spotify_token = None  # skip Spotify for rest of batch
                         else:
                             spotify_consecutive_429s = 0

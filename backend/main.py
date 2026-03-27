@@ -77,7 +77,7 @@ async def _initial_scan():
 
         # Enrich new tracks with popularity data
         try:
-            await popularity.enrich_popularity(batch_size=200)
+            await popularity.enrich_popularity(batch_size=500)
         except Exception:
             logger.warning("Startup popularity enrichment failed")
     except Exception:

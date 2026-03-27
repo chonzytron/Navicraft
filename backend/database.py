@@ -455,7 +455,7 @@ def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
                       lastfm_listeners: int | None = None,
                       lastfm_playcount: int | None = None,
                       spotify_popularity: int | None = None):
-    """Update popularity data for a track."""
+    """Update popularity data for a single track."""
     db.execute("""
         UPDATE tracks
         SET popularity = ?, mb_rating = ?, mb_rating_count = ?,
@@ -463,5 +463,19 @@ def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
         WHERE id = ?
     """, (popularity, mb_rating, mb_rating_count,
           lastfm_listeners, lastfm_playcount, spotify_popularity, track_id))
+
+
+def bulk_update_popularity(db: sqlite3.Connection, rows: list[tuple]):
+    """
+    Batch-update popularity for multiple tracks in one transaction.
+    Each row: (popularity, mb_rating, mb_rating_count, lastfm_listeners,
+               lastfm_playcount, spotify_popularity, track_id)
+    """
+    db.executemany("""
+        UPDATE tracks
+        SET popularity = ?, mb_rating = ?, mb_rating_count = ?,
+            lastfm_listeners = ?, lastfm_playcount = ?, spotify_popularity = ?
+        WHERE id = ?
+    """, rows)
 
 

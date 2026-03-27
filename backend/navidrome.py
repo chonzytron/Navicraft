@@ -7,7 +7,6 @@ import asyncio
 import hashlib
 import secrets
 import logging
-from pathlib import Path
 import httpx
 from config import config
 import database as db

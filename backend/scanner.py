@@ -10,12 +10,10 @@ import asyncio
 from pathlib import Path
 from typing import Optional, Callable
 import mutagen
-from mutagen.easyid3 import EasyID3
 from mutagen.flac import FLAC
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.mp4 import MP4
-from mutagen.apev2 import APEv2
 from mutagen.id3 import ID3
 
 from config import config

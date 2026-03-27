@@ -112,21 +112,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-bar.on{display:flex}
 .enrich-fill{height:3px;background:var(--accent);border-radius:2px;transition:width .5s}
 
-/* --- History --- */
-.history{margin-top:48px}
-.history h2{font-size:16px;font-weight:600;color:var(--text-2);margin-bottom:14px;letter-spacing:-.2px}
-.hist-list{list-style:none}
-.hist-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:6px;cursor:pointer;transition:border-color .15s}
-.hist-item:hover{border-color:var(--border-hover)}
-.hist-left{flex:1;min-width:0}
-.hist-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hist-meta{font-size:11px;color:var(--text-4);font-family:var(--mono);margin-top:2px}
-.hist-prompt{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-.hist-actions{display:flex;gap:6px;flex-shrink:0}
-.hist-btn{padding:6px 14px;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-3);white-space:nowrap;transition:all .15s;flex-shrink:0}
-.hist-btn:hover{border-color:var(--accent);color:var(--accent)}
-.hist-btn-del{padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-4);transition:all .15s;flex-shrink:0;line-height:1}
-.hist-btn-del:hover{border-color:var(--red);color:var(--red)}
 
 /* --- Mode toggle (Songs / Duration) --- */
 .mode-wrap{display:flex;align-items:center;gap:8px}
@@ -273,11 +258,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     </div>
   </div>
 
-  <!-- Playlist History -->
-  <div class="history" id="historySection" style="display:none">
-    <h2>Recent Playlists</h2>
-    <ul class="hist-list" id="histList"></ul>
-  </div>
 
 </div>
 
@@ -324,7 +304,6 @@ async function init(){
   loadProviders();
   pollScan();
   pollEnrichment();
-  loadHistory();
 }
 
 // --- AI Provider selector ---
@@ -491,7 +470,6 @@ async function generate(){
 
     if(gotResult){
       renderResults(currentResult);
-      loadHistory();
     }else{
       throw new Error('No result received from server');
     }
@@ -608,52 +586,6 @@ function pollEnrichment(){
   };
   check();
   enrichTimer=setInterval(check,15000);
-}
-
-// --- Playlist History ---
-async function loadHistory(){
-  try{
-    const history=await api('/playlists/history');
-    if(!history||!history.length){$('#historySection').style.display='none';return}
-    const list=$('#histList');list.innerHTML='';
-    history.slice(0,20).forEach(h=>{
-      const li=document.createElement('li');li.className='hist-item';
-      const dur=h.total_duration?fmtTotal(h.total_duration):'';
-      const date=h.created_at?new Date(h.created_at+'Z').toLocaleDateString():'';
-      const promptEsc=esc(h.prompt||'').replace(/'/g,"\\'");
-      li.innerHTML=`
-        <div class="hist-left">
-          <div class="hist-name">${esc(h.name)}</div>
-          <div class="hist-prompt">${esc(h.prompt||'')}</div>
-          <div class="hist-meta">${h.song_count||0} songs · ${dur}${date?' · '+date:''}</div>
-        </div>
-        <div class="hist-actions">
-          <button class="hist-btn" onclick="reusePrompt(event,'${promptEsc}')">Reuse</button>
-          <button class="hist-btn-del" onclick="deleteHistory(event,${h.id})" title="Delete from history">&#10005;</button>
-        </div>
-      `;
-      list.appendChild(li);
-    });
-    $('#historySection').style.display='';
-  }catch(e){console.warn('History load failed:',e)}
-}
-
-async function deleteHistory(e,id){
-  e.stopPropagation();
-  try{
-    await api(`/playlists/history/${id}`,{method:'DELETE'});
-    loadHistory();
-  }catch(err){toast(`Delete failed: ${err.message}`,'error')}
-}
-
-function reusePrompt(e,prompt){
-  e.stopPropagation();
-  $('#prompt').value=prompt;
-  $('#results').classList.remove('on');
-  currentResult=null;
-  window.scrollTo({top:0,behavior:'smooth'});
-  $('#prompt').focus();
-  toast('Prompt loaded — edit and generate','info');
 }
 
 // Enter = generate (Shift+Enter = newline)

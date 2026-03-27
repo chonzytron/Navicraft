@@ -5,7 +5,6 @@ Stores rich metadata per track, supports filtering queries for the AI pipeline.
 
 import sqlite3
 import os
-import json
 import logging
 from contextlib import contextmanager
 from typing import Optional
@@ -64,17 +63,6 @@ CREATE TABLE IF NOT EXISTS scan_log (
     status          TEXT DEFAULT 'running'
 );
 
-CREATE TABLE IF NOT EXISTS playlists (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    name            TEXT NOT NULL,
-    description     TEXT,
-    prompt          TEXT,
-    track_ids       TEXT,
-    navidrome_id    TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    song_count      INTEGER,
-    total_duration  REAL
-);
 """
 
 
@@ -381,35 +369,6 @@ def get_last_scan(db: sqlite3.Connection) -> Optional[dict]:
         "SELECT * FROM scan_log ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return dict(row) if row else None
-
-
-# --- Playlist log ---
-
-def save_playlist_log(db: sqlite3.Connection, name: str, description: str,
-                      prompt: str, track_ids: list[int], navidrome_id: str,
-                      song_count: int, total_duration: float):
-    """Log a created playlist."""
-    db.execute("""
-        INSERT INTO playlists (name, description, prompt, track_ids, navidrome_id, song_count, total_duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (name, description, prompt, json.dumps(track_ids), navidrome_id, song_count, total_duration))
-
-
-def get_playlist_history(db: sqlite3.Connection, limit: int = 50) -> list[dict]:
-    """Get recent playlist generation history."""
-    rows = db.execute("""
-        SELECT id, name, description, prompt, song_count, total_duration, created_at, navidrome_id
-        FROM playlists
-        ORDER BY id DESC
-        LIMIT ?
-    """, (limit,)).fetchall()
-    return [dict(r) for r in rows]
-
-
-def delete_playlist_log(db: sqlite3.Connection, playlist_id: int) -> bool:
-    """Delete a playlist from local history. Returns True if a row was deleted."""
-    cur = db.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
-    return cur.rowcount > 0
 
 
 # --- Popularity ---

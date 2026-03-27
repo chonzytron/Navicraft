@@ -378,23 +378,6 @@ async def generate_playlist(req: GenerateRequest):
                 else:
                     result["auto_create_error"] = "No Navidrome IDs matched. Run a Navidrome sync."
 
-            # Always log to playlist history
-            if matched_songs:
-                try:
-                    with db.get_db() as conn:
-                        db.save_playlist_log(
-                            conn,
-                            name=result["name"],
-                            description=result["description"],
-                            prompt=req.prompt,
-                            track_ids=[t["id"] for t in matched_songs],
-                            navidrome_id=navidrome_pl_id or "",
-                            song_count=len(matched_songs),
-                            total_duration=total_duration,
-                        )
-                except Exception as e:
-                    logger.warning("Failed to save playlist history: %s", e)
-
             yield sse("result", result)
 
         except ValueError as e:
@@ -425,23 +408,6 @@ async def list_playlists():
         return await navidrome.get_playlists()
     except Exception as e:
         raise HTTPException(502, detail=str(e))
-
-
-@app.get("/api/playlists/history")
-async def playlist_history():
-    """Get local playlist generation history."""
-    with db.get_db() as conn:
-        return db.get_playlist_history(conn)
-
-
-@app.delete("/api/playlists/history/{history_id}")
-async def delete_playlist_history(history_id: int):
-    """Delete a playlist from local generation history."""
-    with db.get_db() as conn:
-        deleted = db.delete_playlist_log(conn, history_id)
-    if not deleted:
-        raise HTTPException(404, detail="Playlist not found in history")
-    return {"status": "deleted"}
 
 
 @app.delete("/api/playlists/{playlist_id}")

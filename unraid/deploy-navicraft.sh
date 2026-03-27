@@ -41,7 +41,7 @@ AI_PROVIDER="claude"
 
 # Claude (Anthropic) — required if AI_PROVIDER=claude
 CLAUDE_API_KEY=""
-CLAUDE_MODEL="claude-sonnet-4-20250514"
+CLAUDE_MODEL="claude-3-5-sonnet-20241022"
 
 # Gemini (Google) — required if AI_PROVIDER=gemini
 GEMINI_API_KEY=""

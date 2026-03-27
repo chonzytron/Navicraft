@@ -436,6 +436,15 @@ async def enrich_popularity(batch_size: int = 500):
     enriched = 0
     skipped = 0
     needs_mb_count = 0
+    WRITE_BATCH = 50  # flush to DB every N tracks
+
+    pending: list[tuple] = []  # buffered rows for bulk write
+
+    def flush_pending():
+        if pending:
+            with db.get_db() as conn:
+                db.bulk_update_popularity(conn, pending)
+            pending.clear()
 
     async with httpx.AsyncClient(
         timeout=15,
@@ -454,49 +463,49 @@ async def enrich_popularity(batch_size: int = 500):
             track_number = track.get("track_number")
 
             if not artist or not title:
-                with db.get_db() as conn:
-                    db.update_popularity(conn, track["id"], 30, None, 0)
+                pending.append((30, None, 0, None, None, None, track["id"]))
                 skipped += 1
-                continue
+            else:
+                # Spotify
+                spotify_result = None
+                if spotify_token:
+                    spotify_result = await _lookup_spotify(client, artist, title, spotify_token)
+                    await asyncio.sleep(SPOTIFY_DELAY)
 
-            # Spotify
-            spotify_result = None
-            if spotify_token:
-                spotify_result = await _lookup_spotify(client, artist, title, spotify_token)
-                await asyncio.sleep(SPOTIFY_DELAY)
+                # Last.fm
+                lastfm_result = None
+                if has_lastfm:
+                    lastfm_result = await _lookup_lastfm(client, artist, title)
+                    await asyncio.sleep(LASTFM_DELAY)
 
-            # Last.fm
-            lastfm_result = None
-            if has_lastfm:
-                lastfm_result = await _lookup_lastfm(client, artist, title)
-                await asyncio.sleep(LASTFM_DELAY)
+                # MusicBrainz — only when Spotify/Last.fm don't have good coverage
+                has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
+                has_good_lastfm = (lastfm_result and lastfm_result.get("listeners", 0) >= 100_000)
+                mb_result = None
+                if not (has_good_spotify or has_good_lastfm):
+                    mb_result = await _lookup_musicbrainz(client, artist, title)
+                    await asyncio.sleep(MB_DELAY)
+                    needs_mb_count += 1
 
-            # MusicBrainz — only when Spotify/Last.fm don't have good coverage
-            has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
-            has_good_lastfm = (lastfm_result and lastfm_result.get("listeners", 0) >= 100_000)
-            mb_result = None
-            if not (has_good_spotify or has_good_lastfm):
-                mb_result = await _lookup_musicbrainz(client, artist, title)
-                await asyncio.sleep(MB_DELAY)
-                needs_mb_count += 1
-
-            # Blend all sources and write immediately
-            popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track_number)
-            with db.get_db() as conn:
-                db.update_popularity(
-                    conn,
-                    track["id"],
+                popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track_number)
+                pending.append((
                     popularity,
                     mb_result.get("mb_rating") if mb_result else None,
                     mb_result.get("mb_rating_count", 0) if mb_result else 0,
                     lastfm_result.get("listeners") if lastfm_result else None,
                     lastfm_result.get("playcount") if lastfm_result else None,
                     spotify_result.get("popularity") if spotify_result else None,
-                )
-            enriched += 1
+                    track["id"],
+                ))
+                enriched += 1
+
+            if len(pending) >= WRITE_BATCH:
+                flush_pending()
 
             if (enriched + skipped) % 100 == 0:
                 logger.info("Popularity: %d enriched, %d skipped so far (%d MB lookups)", enriched, skipped, needs_mb_count)
+
+        flush_pending()  # write any remaining tracks
 
     # Check remaining
     with db.get_db() as conn:

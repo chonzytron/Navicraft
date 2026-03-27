@@ -253,7 +253,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     <div class="res-actions">
       <button class="btn btn-primary" id="saveBtn" onclick="savePlaylist()">Save to Navidrome</button>
       <button class="btn btn-ghost" onclick="exportM3U()">Export .m3u</button>
-      <button class="btn btn-ghost" onclick="moreLikeThis()">More like this</button>
       <button class="btn btn-ghost" onclick="reset()">New playlist</button>
     </div>
   </div>
@@ -555,18 +554,6 @@ function reset(){
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
-function moreLikeThis(){
-  if(!currentResult)return;
-  const artists=[...new Set(currentResult.songs.slice(0,10).map(s=>s.artist).filter(Boolean))].slice(0,5);
-  const desc=currentResult.description||'';
-  const orig=currentResult.name||'';
-  const newPrompt=`More like "${orig}" — ${desc}${artists.length?'. Artists like '+artists.join(', '):''}`;
-  $('#prompt').value=newPrompt;
-  $('#results').classList.remove('on');
-  currentResult=null;
-  window.scrollTo({top:0,behavior:'smooth'});
-  $('#prompt').focus();
-}
 
 // --- Enrichment progress ---
 let enrichTimer=null;

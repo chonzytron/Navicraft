@@ -112,26 +112,19 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-bar.on{display:flex}
 .enrich-fill{height:3px;background:var(--accent);border-radius:2px;transition:width .5s}
 
-/* --- History --- */
-.history{margin-top:48px}
-.history h2{font-size:16px;font-weight:600;color:var(--text-2);margin-bottom:14px;letter-spacing:-.2px}
-.hist-list{list-style:none}
-.hist-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:6px;cursor:pointer;transition:border-color .15s}
-.hist-item:hover{border-color:var(--border-hover)}
-.hist-left{flex:1;min-width:0}
-.hist-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hist-meta{font-size:11px;color:var(--text-4);font-family:var(--mono);margin-top:2px}
-.hist-prompt{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-.hist-actions{display:flex;gap:6px;flex-shrink:0}
-.hist-btn{padding:6px 14px;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-3);white-space:nowrap;transition:all .15s;flex-shrink:0}
-.hist-btn:hover{border-color:var(--accent);color:var(--accent)}
-.hist-btn-del{padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-4);transition:all .15s;flex-shrink:0;line-height:1}
-.hist-btn-del:hover{border-color:var(--red);color:var(--red)}
+
+/* --- Mode toggle (Songs / Duration) --- */
+.mode-wrap{display:flex;align-items:center;gap:8px}
+.mode-pills{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;gap:2px}
+.mode-btn{padding:4px 10px;border-radius:4px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;color:var(--text-3);background:transparent;border:none;transition:all .2s}
+.mode-btn:hover{color:var(--text-2)}
+.mode-btn.on{background:var(--surface-3);color:var(--text);box-shadow:0 1px 4px #0006}
+.mode-input{width:54px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;text-align:center}
+.mode-input:focus{border-color:var(--border-focus)}
 
 /* --- Provider selector --- */
-.pvd-wrap{display:none;align-items:center;gap:8px}
+.pvd-wrap{display:none;align-items:center}
 .pvd-wrap.on{display:flex}
-.pvd-label{font-size:12px;color:var(--text-4);font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px;white-space:nowrap}
 .pvd-pills{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;gap:2px}
 .pvd-btn{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:4px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;color:var(--text-3);background:transparent;border:none;transition:all .2s;white-space:nowrap}
 .pvd-btn:hover{color:var(--text-2)}
@@ -173,12 +166,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <div class="logo-mark">&#9835;</div>
       <h1>Navi<span>Craft</span></h1>
     </div>
-    <div class="header-right">
-      <div class="badge" id="scanBadge" onclick="triggerScan()" title="Click to rescan library">
-        <span class="dot dot-ok" id="scanDot"></span>
-        <span id="scanText">Indexed</span>
-      </div>
-    </div>
   </header>
 
   <!-- Scan Progress Bar -->
@@ -204,26 +191,24 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 
   <!-- Prompt -->
   <div class="prompt-wrap">
-    <textarea id="prompt" placeholder="Describe the playlist you want...&#10;&#10;e.g. &quot;An introspective late-night mix — shoegaze, dream pop, slowcore. &#10;Think Slowdive meets Low. Keep it under an hour.&quot;" rows="3"></textarea>
+    <textarea id="prompt" placeholder="Describe the playlist you want..." rows="3"></textarea>
     <div class="prompt-foot">
       <div class="prompt-opts">
-        <div class="opt">
-          <span>Songs</span>
-          <input type="number" id="maxSongs" value="25" min="5" max="100">
+        <div class="mode-wrap">
+          <div class="mode-pills">
+            <button class="mode-btn on" id="modeSongs" onclick="setMode('songs')">Songs</button>
+            <button class="mode-btn" id="modeDuration" onclick="setMode('duration')">Duration</button>
+          </div>
+          <input type="number" class="mode-input" id="maxSongs" value="25" min="5" max="100">
+          <input type="number" class="mode-input" id="targetMin" value="60" min="5" max="600" style="display:none">
         </div>
-        <div class="opt">
-          <span>Minutes</span>
-          <input type="number" id="targetMin" value="" min="5" max="600" placeholder="any">
-        </div>
-        <label class="toggle-wrap" onclick="toggleAuto(event)">
-          <div class="toggle-track" id="autoToggle"></div>
-          <span>Save without preview</span>
+        <label class="toggle-wrap" onclick="togglePreview(event)">
+          <div class="toggle-track on" id="previewToggle"></div>
+          <span>Preview</span>
         </label>
         <div class="pvd-wrap" id="pvdWrap">
-          <span class="pvd-label">AI</span>
           <div class="pvd-pills">
             <button class="pvd-btn pvd-claude" id="pvdClaude" onclick="setProvider('claude')">
-              <!-- Anthropic-style mark: simplified triangle A -->
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                 <path d="M8 1.5L14.2 13.5H1.8L8 1.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
                 <path d="M5.2 10.5H10.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -232,7 +217,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
               <span class="pvd-model" id="pvdClaudeModel"></span>
             </button>
             <button class="pvd-btn pvd-gemini" id="pvdGemini" onclick="setProvider('gemini')">
-              <!-- Gemini 4-point star -->
               <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M8 1C8 1 6.8 5.8 5.5 7.1 4.2 8.4 1 8 1 8 1 8 4.2 7.6 5.5 8.9 6.8 10.2 8 15 8 15 8 15 9.2 10.2 10.5 8.9 11.8 7.6 15 8 15 8 15 8 11.8 8.4 10.5 7.1 9.2 5.8 8 1 8 1Z"/>
               </svg>
@@ -269,16 +253,10 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     <div class="res-actions">
       <button class="btn btn-primary" id="saveBtn" onclick="savePlaylist()">Save to Navidrome</button>
       <button class="btn btn-ghost" onclick="exportM3U()">Export .m3u</button>
-      <button class="btn btn-ghost" onclick="moreLikeThis()">More like this</button>
       <button class="btn btn-ghost" onclick="reset()">New playlist</button>
     </div>
   </div>
 
-  <!-- Playlist History -->
-  <div class="history" id="historySection" style="display:none">
-    <h2>Recent Playlists</h2>
-    <ul class="hist-list" id="histList"></ul>
-  </div>
 
 </div>
 
@@ -288,7 +266,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // --- State ---
 let currentResult = null;
 let scanPollTimer = null;
-let activeProvider = null; // null = use server default
+let activeProvider = null;
+let activeMode = 'songs';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -324,7 +303,6 @@ async function init(){
   loadProviders();
   pollScan();
   pollEnrichment();
-  loadHistory();
 }
 
 // --- AI Provider selector ---
@@ -362,18 +340,20 @@ async function loadStats(){
     $('#vArtists').textContent=num(s.artist_count);
     $('#vDuration').textContent=fmtTotal(s.total_duration||0);
     $('#stats').style.display='';
-
-    // Update scan badge
-    if(s.song_count>0){
-      $('#scanDot').className='dot dot-ok';
-      $('#scanText').textContent=`${num(s.song_count)} indexed`;
-    }
   }catch(e){console.warn('Stats load failed:',e)}
 }
 
-function toggleAuto(e){
+function togglePreview(e){
   e.preventDefault();
-  $('#autoToggle').classList.toggle('on');
+  $('#previewToggle').classList.toggle('on');
+}
+
+function setMode(m){
+  activeMode=m;
+  $('#modeSongs').classList.toggle('on',m==='songs');
+  $('#modeDuration').classList.toggle('on',m==='duration');
+  $('#maxSongs').style.display=m==='songs'?'':'none';
+  $('#targetMin').style.display=m==='duration'?'':'none';
 }
 
 // --- Scan ---
@@ -394,19 +374,16 @@ function pollScan(){
         $('#scanBar').classList.add('on');
         $('#scanMsg').textContent=s.message||'Scanning...';
         $('#scanPct').textContent=s.total?`${s.current}/${s.total}`:'';
-        $('#scanDot').className='dot dot-busy';
-        $('#scanText').textContent='Scanning';
       }else{
         $('#scanBar').classList.remove('on');
         if(s.phase==='idle'){
           clearInterval(scanPollTimer);
           scanPollTimer=null;
-          loadStats(); // refresh stats after scan completes
+          loadStats();
         }
       }
     }catch{}
   },1500);
-  // Stop polling after 10 min max
   setTimeout(()=>{if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null}},600000);
 }
 
@@ -424,9 +401,9 @@ async function generate(){
   const prompt=$('#prompt').value.trim();
   if(!prompt){toast('Enter a prompt','error');return}
 
-  const maxSongs=parseInt($('#maxSongs').value)||25;
-  const targetMin=$('#targetMin').value?parseInt($('#targetMin').value):null;
-  const autoCreate=$('#autoToggle').classList.contains('on');
+  const maxSongs=activeMode==='songs'?parseInt($('#maxSongs').value)||25:100;
+  const targetMin=activeMode==='duration'?parseInt($('#targetMin').value)||60:null;
+  const autoCreate=!$('#previewToggle').classList.contains('on');
 
   $('#genBtn').disabled=true;
   $('#results').classList.remove('on');
@@ -461,6 +438,7 @@ async function generate(){
     const decoder=new TextDecoder();
     let buffer='';
     let gotResult=false;
+    let eventType=null; // persists across chunks so large payloads aren't lost
 
     while(true){
       const {done,value}=await reader.read();
@@ -470,7 +448,6 @@ async function generate(){
       // Parse SSE events from buffer
       const lines=buffer.split('\n');
       buffer=lines.pop(); // keep incomplete line in buffer
-      let eventType=null;
       for(const line of lines){
         if(line.startsWith('event: ')){
           eventType=line.slice(7).trim();
@@ -492,7 +469,6 @@ async function generate(){
 
     if(gotResult){
       renderResults(currentResult);
-      loadHistory();
     }else{
       throw new Error('No result received from server');
     }
@@ -578,18 +554,6 @@ function reset(){
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
-function moreLikeThis(){
-  if(!currentResult)return;
-  const artists=[...new Set(currentResult.songs.slice(0,10).map(s=>s.artist).filter(Boolean))].slice(0,5);
-  const desc=currentResult.description||'';
-  const orig=currentResult.name||'';
-  const newPrompt=`More like "${orig}" — ${desc}${artists.length?'. Artists like '+artists.join(', '):''}`;
-  $('#prompt').value=newPrompt;
-  $('#results').classList.remove('on');
-  currentResult=null;
-  window.scrollTo({top:0,behavior:'smooth'});
-  $('#prompt').focus();
-}
 
 // --- Enrichment progress ---
 let enrichTimer=null;
@@ -609,52 +573,6 @@ function pollEnrichment(){
   };
   check();
   enrichTimer=setInterval(check,15000);
-}
-
-// --- Playlist History ---
-async function loadHistory(){
-  try{
-    const history=await api('/playlists/history');
-    if(!history||!history.length){$('#historySection').style.display='none';return}
-    const list=$('#histList');list.innerHTML='';
-    history.slice(0,20).forEach(h=>{
-      const li=document.createElement('li');li.className='hist-item';
-      const dur=h.total_duration?fmtTotal(h.total_duration):'';
-      const date=h.created_at?new Date(h.created_at+'Z').toLocaleDateString():'';
-      const promptEsc=esc(h.prompt||'').replace(/'/g,"\\'");
-      li.innerHTML=`
-        <div class="hist-left">
-          <div class="hist-name">${esc(h.name)}</div>
-          <div class="hist-prompt">${esc(h.prompt||'')}</div>
-          <div class="hist-meta">${h.song_count||0} songs · ${dur}${date?' · '+date:''}</div>
-        </div>
-        <div class="hist-actions">
-          <button class="hist-btn" onclick="reusePrompt(event,'${promptEsc}')">Reuse</button>
-          <button class="hist-btn-del" onclick="deleteHistory(event,${h.id})" title="Delete from history">&#10005;</button>
-        </div>
-      `;
-      list.appendChild(li);
-    });
-    $('#historySection').style.display='';
-  }catch(e){console.warn('History load failed:',e)}
-}
-
-async function deleteHistory(e,id){
-  e.stopPropagation();
-  try{
-    await api(`/playlists/history/${id}`,{method:'DELETE'});
-    loadHistory();
-  }catch(err){toast(`Delete failed: ${err.message}`,'error')}
-}
-
-function reusePrompt(e,prompt){
-  e.stopPropagation();
-  $('#prompt').value=prompt;
-  $('#results').classList.remove('on');
-  currentResult=null;
-  window.scrollTo({top:0,behavior:'smooth'});
-  $('#prompt').focus();
-  toast('Prompt loaded — edit and generate','info');
 }
 
 // Enter = generate (Shift+Enter = newline)

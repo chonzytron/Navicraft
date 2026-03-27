@@ -342,7 +342,12 @@ async def generate_playlist(req: GenerateRequest):
             candidate_map = {c["id"]: c for c in candidates}
             matched_songs = []
             for s in ai_result.get("songs", []):
-                track = candidate_map.get(s["id"])
+                # AI may return IDs as strings; normalise to int
+                try:
+                    sid = int(s["id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                track = candidate_map.get(sid)
                 if track:
                     matched_songs.append(track)
 
@@ -386,7 +391,14 @@ async def generate_playlist(req: GenerateRequest):
             logger.exception("Playlist generation failed")
             yield sse("error", {"detail": "Playlist generation failed. Check logs."})
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disables Nginx proxy buffering
+        },
+    )
 
 
 # =========================================================================

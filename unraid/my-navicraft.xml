@@ -11,10 +11,10 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/chonzytron/navicraft/issues</Support>
   <Project>https://github.com/chonzytron/navicraft</Project>
-  <Overview>NaviCraft is an AI-powered playlist generator for Navidrome. It scans your local music library, builds a metadata index, and uses AI (Claude or Gemini) to generate playlists from free-form text prompts like "chill jazz for a rainy evening" or "high energy workout mix".</Overview>
+  <Overview>NaviCraft is an AI-powered playlist generator for Navidrome and Plex/Plexamp. It scans your local music library, builds a metadata index, and uses AI (Claude or Gemini) to generate playlists from free-form text prompts like "chill jazz for a rainy evening" or "high energy workout mix". Supports both Navidrome and Plex as playlist targets — configure one or both.</Overview>
   <Category>MediaApp:Music</Category>
   <Icon>https://raw.githubusercontent.com/chonzytron/navicraft/main/frontend/assets/icon.png</Icon>
-  <Description>NaviCraft - AI-powered playlist generator for Navidrome. Scans your music library and uses AI to create playlists from natural language prompts.</Description>
+  <Description>NaviCraft - AI-powered playlist generator for Navidrome and Plex/Plexamp. Scans your music library and uses AI to create playlists from natural language prompts.</Description>
   <WebUI>http://[IP]:[PORT:8085]</WebUI>
   <ExtraParams>--restart=unless-stopped</ExtraParams>
   <DonateText/>
@@ -57,15 +57,15 @@
     Required="true"
     Mask="false">/mnt/user/appdata/navicraft</Config>
 
-  <!-- Navidrome Connection -->
+  <!-- Navidrome Connection (optional if using Plex) -->
   <Config
     Name="Navidrome URL"
     Target="NAVIDROME_URL"
     Default="http://navidrome:4533"
-    Description="URL to your Navidrome instance. Use container name if on same Docker network, or http://[UNRAID_IP]:4533 for bridge mode."
+    Description="URL to your Navidrome instance. Use container name if on same Docker network, or http://[UNRAID_IP]:4533 for bridge mode. Leave empty if using Plex only."
     Type="Variable"
     Display="always"
-    Required="true"
+    Required="false"
     Mask="false">http://navidrome:4533</Config>
 
   <Config
@@ -75,7 +75,7 @@
     Description="Navidrome admin username"
     Type="Variable"
     Display="always"
-    Required="true"
+    Required="false"
     Mask="false">admin</Config>
 
   <Config
@@ -85,7 +85,28 @@
     Description="Navidrome admin password"
     Type="Variable"
     Display="always"
-    Required="true"
+    Required="false"
+    Mask="true"></Config>
+
+  <!-- Plex / Plexamp Connection (optional if using Navidrome) -->
+  <Config
+    Name="Plex URL"
+    Target="PLEX_URL"
+    Default=""
+    Description="URL to your Plex server (e.g., http://192.168.1.100:32400). Leave empty if using Navidrome only."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Plex Token"
+    Target="PLEX_TOKEN"
+    Default=""
+    Description="Plex authentication token. See https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/"
+    Type="Variable"
+    Display="always"
+    Required="false"
     Mask="true"></Config>
 
   <!-- AI Provider -->

@@ -209,7 +209,7 @@ def _walk_music_dir() -> list[str]:
     extensions = config.extensions_set
     music_dir = config.music_dir
 
-    for root, dirs, filenames in os.walk(music_dir):
+    for root, dirs, filenames in os.walk(music_dir, followlinks=False):
         # Skip hidden directories
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for fname in filenames:

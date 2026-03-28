@@ -142,7 +142,6 @@ async def _call_claude(system: str, user_message: str) -> str:
                     err_msg = resp.text[:300]
                 logger.error("Claude API error %d: %s", resp.status_code, err_msg)
                 raise ValueError(f"Claude: {err_msg}")
-            resp.raise_for_status()
             data = resp.json()
 
         return "".join(b["text"] for b in data.get("content", []) if b.get("type") == "text")
@@ -166,7 +165,7 @@ async def _call_gemini(system: str, user_message: str) -> str:
                 },
             )
 
-            if resp.status_code in (429, 503) and attempt < max_retries - 1:
+            if resp.status_code in (429, 500, 502, 503, 529) and attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)
                 logger.warning("Gemini returned %d, retrying in %ds (attempt %d/%d)", resp.status_code, wait, attempt + 1, max_retries)
                 await asyncio.sleep(wait)
@@ -181,7 +180,6 @@ async def _call_gemini(system: str, user_message: str) -> str:
                     err_msg = resp.text[:300]
                 logger.error("Gemini API error %d: %s", resp.status_code, err_msg)
                 raise ValueError(f"Gemini: {err_msg}")
-            resp.raise_for_status()
             data = resp.json()
 
         text = ""
@@ -256,7 +254,7 @@ async def pass2_select_songs(
             parts.append(f"({c['genre']})")
         if c.get("year"):
             parts.append(f"{c['year']}")
-        if c.get("duration"):
+        if c.get("duration") is not None:
             m, s = divmod(int(c["duration"]), 60)
             parts.append(f"{m}:{s:02d}")
         if c.get("bpm"):

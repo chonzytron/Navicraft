@@ -459,7 +459,7 @@ def _blend_scores(spotify: dict | None, lastfm: dict | None, mb: dict | None,
     # Apply track position bonus
     blended += _track_position_bonus(track_number)
 
-    return max(0, min(100, int(blended)))
+    return max(0, min(100, round(blended)))
 
 
 async def enrich_popularity(batch_size: int = 500):
@@ -510,8 +510,11 @@ async def enrich_popularity(batch_size: int = 500):
 
         def flush_pending():
             if pending:
-                with db.get_db() as conn:
-                    db.bulk_update_popularity(conn, pending)
+                try:
+                    with db.get_db() as conn:
+                        db.bulk_update_popularity(conn, pending)
+                except Exception:
+                    logger.exception("Popularity: failed to flush %d pending rows", len(pending))
                 pending.clear()
 
         async with httpx.AsyncClient(
@@ -541,7 +544,7 @@ async def enrich_popularity(batch_size: int = 500):
                 logger.info("Popularity: enriching %d tracks via %s", len(tracks), " + ".join(sources))
 
             spotify_consecutive_429s = 0
-            SPOTIFY_429_LIMIT = 1  # disable Spotify immediately on the first 429
+            SPOTIFY_429_LIMIT = 3  # disable Spotify after 3 consecutive 429s
 
             if tracks:
                 for track in tracks:

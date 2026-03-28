@@ -2,7 +2,7 @@
 
 ## What is NaviCraft?
 
-AI-powered playlist generator for Navidrome. Scans a local music library, builds a SQLite index of metadata + popularity scores, then uses a two-pass AI strategy to generate playlists from free-form text prompts.
+AI-powered playlist generator for Navidrome and Plex/Plexamp. Scans a local music library, builds a SQLite index of metadata + popularity scores, then uses a two-pass AI strategy to generate playlists from free-form text prompts. Supports both Navidrome (Subsonic API) and Plex (Plex HTTP API) as playlist targets — one or both can be configured simultaneously.
 
 ## Architecture
 
@@ -14,12 +14,16 @@ backend/
 ├── scanner.py       # mutagen-based file scanner, reads ID3/Vorbis/FLAC/MP4 tags
 ├── ai_engine.py     # Two-pass AI: intent extraction → SQLite filter → song selection
 ├── navidrome.py     # Subsonic API client (playlist CRUD + ID sync, with retry logic)
+├── plex.py          # Plex HTTP API client (playlist CRUD + ID sync, with retry logic)
 ├── popularity.py    # Multi-source enrichment: Spotify + Last.fm + MusicBrainz + track position
 ├── scheduler.py     # APScheduler for periodic scans (configurable, default 6h) and enrichment (2m)
 └── requirements.txt
 
 frontend/
-└── index.html       # Single-file SPA (vanilla HTML/CSS/JS, no build step)
+├── index.html       # SPA markup (vanilla HTML, no build step)
+└── assets/
+    ├── app.js       # Frontend logic (vanilla JS)
+    └── styles.css   # Styles
 
 unraid/
 ├── deploy-navicraft.sh  # Unraid User Script for automated deployment
@@ -47,9 +51,10 @@ unraid/
 - **Enrichment lock**: `asyncio.Lock` in `popularity.py` prevents concurrent enrichment runs (startup scan, post-scan trigger, and scheduler all call `enrich_popularity`).
 - **SSE streaming** on `/api/generate` for real-time progress feedback. Includes `X-Accel-Buffering: no` and `Cache-Control: no-cache` headers to prevent Nginx proxy buffering.
 - **Rate limiting**: 10s cooldown on `/api/generate` to prevent double-clicks
-- **Navidrome only for playlist creation** — songs matched by file path, fallback to artist+title
+- **Multi-server support**: Both Navidrome and Plex/Plexamp supported as playlist targets. Songs matched by file path, fallback to artist+title. Server selector shown in UI when both are configured.
+- **Plex integration**: Uses Plex HTTP API with `X-Plex-Token` auth. Tracks matched via `media[].part[].file` path. Playlist creation uses `server://` URI scheme with machine identifier.
 - **Supports Claude and Gemini** as AI providers, switchable per-request via optional `provider` field
-- **Retry logic** everywhere: AI calls (3 retries, exponential backoff), Navidrome calls, popularity lookups
+- **Retry logic** everywhere: AI calls (3 retries, exponential backoff), Navidrome/Plex calls, popularity lookups
 - **Song ID normalisation**: AI responses may return song IDs as strings; backend casts to `int` before candidate map lookup to prevent mismatches.
 - **AI errors surfaced to UI**: API error messages are extracted from JSON responses and raised as `ValueError` so they propagate through the SSE error event to the frontend instead of showing a generic "check logs" message.
 
@@ -59,9 +64,16 @@ unraid/
 cd backend
 pip install -r requirements.txt
 export MUSIC_DIR=/path/to/music
+
+# Navidrome (configure one or both media servers)
 export NAVIDROME_URL=http://localhost:4533
 export NAVIDROME_USER=admin
 export NAVIDROME_PASSWORD=xxx
+
+# Plex / Plexamp (alternative or additional)
+export PLEX_URL=http://localhost:32400
+export PLEX_TOKEN=your-plex-token
+
 export AI_PROVIDER=claude          # or gemini
 export CLAUDE_API_KEY=sk-ant-xxx   # Anthropic API key (separate from Claude.ai subscription)
 uvicorn main:app --reload --port 8085
@@ -77,11 +89,12 @@ docker compose up -d --build
 
 ## Common Development Tasks
 
+- **Add a new media server**: Create a new module (like `plex.py`) implementing `test_connection()`, `sync_*_ids()`, `create_playlist()`, `get_playlists()`, `delete_playlist()`. Add config vars in `config.py`, add DB column + migration in `database.py`, add routes in `main.py`, update `scheduler.py`, and add frontend server button.
 - **Add a new AI provider**: Add a `_call_newprovider()` function in `ai_engine.py`, add config vars in `config.py`, add routing in `_call_ai()`
 - **Add metadata fields**: Update `SCHEMA` in `database.py`, update `_extract_metadata()` in `scanner.py`, update `filter_tracks()` if the field should be filterable
 - **Add API endpoints**: Add route in `main.py`, Pydantic models at the top of the file
 - **Add new popularity source**: Add lookup function in `popularity.py`, integrate into `_blend_scores()`, add DB columns in `database.py` with migration support
-- **Frontend changes**: Edit `frontend/index.html` directly — single file, no build step
+- **Frontend changes**: Edit `frontend/index.html` (markup), `frontend/assets/app.js` (logic), or `frontend/assets/styles.css` — no build step
 - **Schema changes**: Add columns to `SCHEMA` dict in `database.py`; `_migrate()` handles adding new columns automatically on startup
 
 ## API Endpoints
@@ -91,15 +104,17 @@ docker compose up -d --build
 | GET | `/api/health` | Health check (used by Docker HEALTHCHECK) |
 | GET | `/api/ai/providers` | List configured providers with model names |
 | GET | `/api/navidrome/test` | Test Navidrome connection |
+| GET | `/api/plex/test` | Test Plex connection |
+| GET | `/api/servers` | List configured media servers |
 | GET | `/api/library/stats` | Library stats (song/album/artist counts, duration, genres) |
 | GET | `/api/library/genres` | List all genres with counts |
 | GET | `/api/library/search?q=` | Search tracks by text (max 50 results) |
 | POST | `/api/scan?full=false` | Trigger library scan (incremental or full) |
 | GET | `/api/scan/status` | Current scan progress |
 | POST | `/api/generate` | Generate playlist via SSE stream (rate limited 10s) |
-| POST | `/api/playlists` | Save playlist to Navidrome |
-| GET | `/api/playlists` | List Navidrome playlists |
-| DELETE | `/api/playlists/:id` | Delete from Navidrome |
+| POST | `/api/playlists` | Save playlist to media server (accepts `server` param) |
+| GET | `/api/playlists` | List playlists from media server (accepts `server` query) |
+| DELETE | `/api/playlists/:id` | Delete playlist (accepts `server` query) |
 | POST | `/api/popularity/enrich` | Manually trigger an enrichment batch |
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
 | GET | `/api/popularity/status` | Enrichment progress (enriched/total/percent/running) |
@@ -131,21 +146,22 @@ docker compose up -d --build
 
 ## Frontend Features
 
-- **Single-file SPA** — `frontend/index.html`, vanilla JS, no build step
-- **Navidrome status indicator** — green/red dot in header next to logo; click to retest connection
+- **SPA** — `frontend/index.html` (markup) + `assets/app.js` (logic) + `assets/styles.css`, vanilla JS, no build step
+- **Media server status indicators** — green/red dots in header for each configured server (Navidrome and/or Plex); click to retest
+- **Server selector** — pill toggle (Navidrome / Plex) shown when both servers are configured; controls where playlists are saved
 - **Rescan trigger** — click the ♪ logo mark to trigger an incremental library scan
 - **AI provider selector** — pill toggle (Claude / Gemini) shown only when both keys are configured
 - **Mode toggle** — Songs (count) or Duration (minutes), one input visible at a time; number inputs have no spinners, clamp to 1–999
-- **Preview toggle** — when ON, shows results before saving; when OFF, auto-saves to Navidrome on generation
+- **Preview toggle** — when ON, shows results before saving; when OFF, auto-saves to selected media server on generation
 - **SSE progress display** — real-time phase labels and elapsed timer during generation
 - **Enrichment progress bar** — shown while background enrichment is running
-- **Export** — Save to Navidrome or download as .m3u
+- **Export** — Save to Navidrome/Plex or download as .m3u
 
 ## Testing Notes
 
 - The scanner needs actual music files — point `MUSIC_DIR` at a small test collection
 - AI calls are slow (5–30s per pass) — the frontend shows SSE streaming progress with elapsed timer
-- Navidrome ID sync requires Navidrome to be running and accessible at the configured URL
+- Media server ID sync requires Navidrome/Plex to be running and accessible at the configured URL
 - SQLite DB persists at `DB_PATH` (default `/data/navicraft.db`)
 - Popularity enrichment runs in the background every 2 minutes (500 track batches)
 - In Docker on Unraid, `NAVIDROME_URL` must use the host IP, not `localhost`

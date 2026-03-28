@@ -84,7 +84,11 @@ if docker inspect "$CONTAINER_NAME" &>/dev/null; then
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
 fi
 
-# Build from source if requested
+# Always pull the latest image (never reuse a cached version)
+echo "Pulling latest NaviCraft image..."
+docker pull "$DOCKER_IMAGE"
+
+# Build from source if requested (overrides the pulled image)
 if [ "$BUILD_FROM_SOURCE" = "true" ]; then
     echo "Building NaviCraft from source at $SOURCE_PATH..."
     if [ ! -d "$SOURCE_PATH" ]; then
@@ -92,7 +96,7 @@ if [ "$BUILD_FROM_SOURCE" = "true" ]; then
         echo "Clone the repo first: git clone https://github.com/chonzytron/navicraft.git $SOURCE_PATH"
         exit 1
     fi
-    docker build -t navicraft:latest "$SOURCE_PATH"
+    docker build --no-cache -t navicraft:latest "$SOURCE_PATH"
     DOCKER_IMAGE="navicraft:latest"
 fi
 

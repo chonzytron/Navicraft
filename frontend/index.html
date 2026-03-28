@@ -31,7 +31,9 @@ body::before{content:'';position:fixed;inset:0;background:url("data:image/svg+xm
 /* --- Header --- */
 header{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px}
 .logo{display:flex;align-items:center;gap:14px}
-.logo-mark{width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#7c3aed);display:grid;place-items:center;font-size:18px;box-shadow:0 0 24px var(--accent-glow),inset 0 1px 0 #fff1}
+.logo-mark{width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#7c3aed);display:grid;place-items:center;font-size:18px;box-shadow:0 0 24px var(--accent-glow),inset 0 1px 0 #fff1;cursor:pointer;transition:transform .15s,box-shadow .15s}
+.logo-mark:hover{transform:scale(1.08);box-shadow:0 0 32px var(--accent-glow),inset 0 1px 0 #fff1}
+.logo-mark:active{transform:scale(.95)}
 .logo h1{font-size:22px;font-weight:600;letter-spacing:-.5px;color:var(--text)}
 .logo h1 span{color:var(--accent);font-weight:300}
 
@@ -168,7 +170,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   <!-- Header -->
   <header>
     <div class="logo">
-      <div class="logo-mark">&#9835;</div>
+      <div class="logo-mark" onclick="triggerScan()" title="Click to rescan library">&#9835;</div>
       <h1>Navi<span>Craft</span></h1>
     </div>
     <div class="nd-pill" id="ndBar" onclick="testNavidrome()" title="Click to retest">

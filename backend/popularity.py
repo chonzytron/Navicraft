@@ -112,7 +112,7 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
 
         tracks = data.get("tracks", {}).get("items", [])
         if not tracks:
-            return None
+            return {"not_found": True}  # API worked, track simply doesn't exist on Spotify
 
         artist_lower = artist.lower()
         for track in tracks:
@@ -204,7 +204,7 @@ async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> 
 
         track_info = data.get("track")
         if not track_info:
-            return None
+            return {"not_found": True}  # API worked, track simply doesn't exist on Last.fm
 
         listeners = int(track_info.get("listeners", 0))
         playcount = int(track_info.get("playcount", 0))
@@ -550,11 +550,13 @@ async def enrich_popularity(batch_size: int = 500):
                     track_number = track.get("track_number")
 
                     if not artist or not title:
-                        pending.append((30, None, 0, None, None, None, track["id"]))
+                        pending.append((30, None, 0, None, None, None, None, None, None, track["id"]))
                         skipped += 1
                     else:
+                        now = time.time()
                         # Spotify
                         spotify_result = None
+                        spotify_checked_at = None
                         if spotify_token:
                             raw = await _lookup_spotify(client, artist, title, spotify_token)
                             await asyncio.sleep(SPOTIFY_DELAY)
@@ -570,15 +572,24 @@ async def enrich_popularity(batch_size: int = 500):
                                     )
                                     _set_spotify_cooldown(retry_after)
                                     spotify_token = None  # skip Spotify for rest of batch
-                            else:
+                            elif raw and raw.get("not_found"):
+                                spotify_checked_at = now  # confirmed not on Spotify, retry tomorrow
+                            elif raw:
                                 spotify_consecutive_429s = 0
                                 spotify_result = raw
+                                spotify_checked_at = now
 
                         # Last.fm
                         lastfm_result = None
+                        lastfm_checked_at = None
                         if has_lastfm:
-                            lastfm_result = await _lookup_lastfm(client, artist, title)
+                            raw_lfm = await _lookup_lastfm(client, artist, title)
                             await asyncio.sleep(LASTFM_DELAY)
+                            if raw_lfm and raw_lfm.get("not_found"):
+                                lastfm_checked_at = now  # confirmed not on Last.fm, retry tomorrow
+                            elif raw_lfm and not raw_lfm.get("not_found"):
+                                lastfm_result = raw_lfm
+                                lastfm_checked_at = now
 
                         # MusicBrainz — only when neither Spotify nor Last.fm returned anything
                         has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
@@ -598,6 +609,8 @@ async def enrich_popularity(batch_size: int = 500):
                             lastfm_result.get("playcount") if lastfm_result else None,
                             spotify_result.get("popularity") if spotify_result else None,
                             spotify_result.get("spotify_id") if spotify_result else None,
+                            spotify_checked_at,
+                            lastfm_checked_at,
                             track["id"],
                         ))
                         enriched += 1
@@ -627,6 +640,7 @@ async def enrich_popularity(batch_size: int = 500):
                         len(missing_spotify), len(have_id), len(need_search),
                     )
                     topup_pending: list[tuple] = []
+                    not_found_ids: list[int] = []
 
                     def _topup_row(track, raw):
                         lastfm_result = None
@@ -642,7 +656,7 @@ async def enrich_popularity(batch_size: int = 500):
                                 "mb_rating_count": track.get("mb_rating_count", 0),
                             }
                         new_pop = _blend_scores(raw, lastfm_result, mb_result, track.get("track_number"))
-                        return (new_pop, raw["popularity"], raw.get("spotify_id"), track["id"])
+                        return (new_pop, raw["popularity"], raw.get("spotify_id"), time.time(), track["id"])
 
                     # Pass 1: batch lookups for tracks with known Spotify IDs (50 per request)
                     BATCH_SIZE = 50
@@ -667,11 +681,13 @@ async def enrich_popularity(batch_size: int = 500):
                             continue
 
                         id_to_track = {t["spotify_id"]: t for t in chunk}
-                        for spot_id, raw in batch_result.items():
-                            track = id_to_track.get(spot_id)
-                            if track:
+                        for track in chunk:
+                            raw = batch_result.get(track["spotify_id"])
+                            if raw:
                                 topup_pending.append(_topup_row(track, raw))
                                 spotify_topup += 1
+                            else:
+                                not_found_ids.append(track["id"])  # ID no longer on Spotify
 
                         if len(topup_pending) >= WRITE_BATCH:
                             with db.get_db() as conn:
@@ -701,6 +717,10 @@ async def enrich_popularity(batch_size: int = 500):
                             break
 
                         if raw is None:
+                            continue  # network/API error — retry next batch, don't mark
+
+                        if raw.get("not_found"):
+                            not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
                             continue
 
                         spotify_consecutive_429s = 0
@@ -711,6 +731,10 @@ async def enrich_popularity(batch_size: int = 500):
                             with db.get_db() as conn:
                                 db.update_spotify_popularity(conn, topup_pending)
                             topup_pending.clear()
+
+                    if not_found_ids:
+                        with db.get_db() as conn:
+                            db.update_spotify_not_found(conn, not_found_ids)
 
                     if topup_pending:
                         with db.get_db() as conn:
@@ -729,6 +753,7 @@ async def enrich_popularity(batch_size: int = 500):
                 if missing_lastfm:
                     logger.info("Popularity: Last.fm top-up — %d tracks missing Last.fm data", len(missing_lastfm))
                     lastfm_topup_pending: list[tuple] = []
+                    lastfm_not_found_ids: list[int] = []
 
                     for track in missing_lastfm:
                         artist = track.get("artist", "")
@@ -736,12 +761,17 @@ async def enrich_popularity(batch_size: int = 500):
                         if not artist or not title:
                             continue
 
-                        lastfm_result = await _lookup_lastfm(client, artist, title)
+                        raw_lfm = await _lookup_lastfm(client, artist, title)
                         await asyncio.sleep(LASTFM_DELAY)
 
-                        if lastfm_result is None:
-                            continue  # not found on Last.fm, leave as-is
+                        if raw_lfm is None:
+                            continue  # network/API error — retry next batch, don't mark
 
+                        if raw_lfm.get("not_found"):
+                            lastfm_not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
+                            continue
+
+                        lastfm_result = raw_lfm
                         # Reblend with existing Spotify/MB data already stored in DB
                         spotify_result = None
                         if track.get("spotify_popularity") is not None:
@@ -758,6 +788,7 @@ async def enrich_popularity(batch_size: int = 500):
                             new_popularity,
                             lastfm_result.get("listeners"),
                             lastfm_result.get("playcount"),
+                            time.time(),
                             track["id"],
                         ))
                         lastfm_topup += 1
@@ -766,6 +797,10 @@ async def enrich_popularity(batch_size: int = 500):
                             with db.get_db() as conn:
                                 db.update_lastfm_popularity(conn, lastfm_topup_pending)
                             lastfm_topup_pending.clear()
+
+                    if lastfm_not_found_ids:
+                        with db.get_db() as conn:
+                            db.update_lastfm_not_found(conn, lastfm_not_found_ids)
 
                     if lastfm_topup_pending:
                         with db.get_db() as conn:

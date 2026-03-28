@@ -44,15 +44,16 @@ LASTFM_DELAY = 0.25  # 5 req/sec allowed
 # --- Spotify ---
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
-SPOTIFY_DELAY = 0.2  # ~5 req/s — conservative to avoid 429s
+SPOTIFY_DELAY = 1.0  # ~1 req/s — Spotify Client Credentials search endpoint allows ~60 req/min
 
 # Spotify token cache
 _spotify_token: str | None = None
 _spotify_token_expires: float = 0
 
 # Spotify rate-limit cooldown — set when a batch gets rate-limited,
-# skip Spotify entirely until this timestamp passes
-SPOTIFY_COOLDOWN_SECONDS = 600  # 10 minutes
+# skip Spotify entirely until this timestamp passes.
+# Honours Retry-After header if Spotify sends one.
+SPOTIFY_COOLDOWN_SECONDS = 600  # fallback cooldown if no Retry-After header
 _spotify_blocked_until: float = 0
 
 
@@ -102,7 +103,8 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
             headers={"Authorization": f"Bearer {token}"},
         )
         if resp.status_code == 429:
-            return {"rate_limited": True}
+            retry_after = resp.headers.get("Retry-After")
+            return {"rate_limited": True, "retry_after": int(retry_after) if retry_after and retry_after.isdigit() else None}
         if resp.status_code == 401:
             return None
         resp.raise_for_status()
@@ -474,7 +476,7 @@ async def enrich_popularity(batch_size: int = 500):
                         logger.warning("Popularity: Spotify token failed, continuing without Spotify")
 
             spotify_consecutive_429s = 0
-            SPOTIFY_429_LIMIT = 3  # disable Spotify for batch after this many consecutive 429s
+            SPOTIFY_429_LIMIT = 1  # disable Spotify immediately on the first 429
 
             for track in tracks:
                 artist = track.get("artist", "")
@@ -493,13 +495,14 @@ async def enrich_popularity(batch_size: int = 500):
                         if raw and raw.get("rate_limited"):
                             spotify_consecutive_429s += 1
                             if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
+                                retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
                                 logger.warning(
-                                    "Popularity: Spotify rate-limited %d times in a row — "
-                                    "disabling for %ds then retrying",
-                                    spotify_consecutive_429s,
-                                    SPOTIFY_COOLDOWN_SECONDS,
+                                    "Popularity: Spotify rate-limited — "
+                                    "disabling for %ds (Retry-After: %s)",
+                                    retry_after,
+                                    raw.get("retry_after"),
                                 )
-                                _spotify_blocked_until = time.time() + SPOTIFY_COOLDOWN_SECONDS
+                                _spotify_blocked_until = time.time() + retry_after
                                 spotify_token = None  # skip Spotify for rest of batch
                         else:
                             spotify_consecutive_429s = 0
@@ -553,8 +556,8 @@ async def enrich_popularity(batch_size: int = 500):
                     topup_pending: list[tuple] = []
 
                     for track in missing_spotify:
-                        if _spotify_blocked_until and time.time() >= _spotify_blocked_until:
-                            break  # rate-limited again mid-pass, stop cleanly
+                        if _spotify_blocked_until and time.time() < _spotify_blocked_until:
+                            break  # still in cooldown mid-pass, stop cleanly
 
                         artist = track.get("artist", "")
                         title = track.get("title", "")
@@ -567,12 +570,14 @@ async def enrich_popularity(batch_size: int = 500):
                         if raw and raw.get("rate_limited"):
                             spotify_consecutive_429s += 1
                             if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
+                                retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
                                 logger.warning(
                                     "Popularity: Spotify rate-limited during top-up — "
-                                    "disabling for %ds",
-                                    SPOTIFY_COOLDOWN_SECONDS,
+                                    "disabling for %ds (Retry-After: %s)",
+                                    retry_after,
+                                    raw.get("retry_after"),
                                 )
-                                _spotify_blocked_until = time.time() + SPOTIFY_COOLDOWN_SECONDS
+                                _spotify_blocked_until = time.time() + retry_after
                                 break
                             continue
 

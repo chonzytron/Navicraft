@@ -6,20 +6,22 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Descr
 
 ```
 1. SCAN
-   Walk /music directory -> read tags with mutagen -> SQLite index
+   Walk /music directory → read tags with mutagen → SQLite index
    (artist, album, title, genre, year, BPM, mood, duration, ...)
+   Click the ♪ logo at any time to trigger a manual rescan.
 
 2. ENRICH (background)
-   Query Last.fm + MusicBrainz for each track -> popularity scores (0-100)
+   Query Spotify + Last.fm + MusicBrainz for each track → popularity scores (0–100)
    Higher scores = well-known, beloved tracks
+   Runs automatically every 2 minutes until all tracks are enriched.
 
 3. GENERATE (two-pass AI)
-   Pass 1: prompt + library summary -> structured filters (genres, era, mood, tempo, exclusions)
-   SQLite query narrows to ~500 candidates, biased by popularity, capped per artist
-   Pass 2: prompt + candidate list -> AI picks & orders the final playlist
+   Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, exclusions)
+   SQLite query narrows to ~500 candidates, biased by popularity, capped per artist (max 15)
+   Pass 2: prompt + candidate list → AI picks & orders the final playlist
 
 4. CREATE PLAYLIST
-   Match songs to Navidrome IDs -> Subsonic createPlaylist
+   Match songs to Navidrome IDs → Subsonic createPlaylist
    Or export as .m3u file for any music player
 ```
 
@@ -28,14 +30,14 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Descr
 ## Features
 
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
-- **Popularity-aware** — Uses Last.fm listener data and MusicBrainz ratings so playlists favor well-known tracks over deep cuts
+- **Popularity-aware** — Uses Spotify streaming data, Last.fm listener counts, and MusicBrainz ratings so playlists favour well-known tracks over deep cuts
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
-- **Artist diversity** — Candidates are capped per artist so one artist doesn't dominate the playlist
-- **Real-time progress** — SSE streaming shows each phase as it happens with elapsed time
-- **Playlist history** — Browse and reuse prompts from past generations, or "More like this" to create variations
-- **Multiple AI providers** — Claude (Anthropic) or Gemini (Google), switchable via config
-- **Rich metadata** — Scans BPM, mood, composer, label directly from files (richer than Subsonic API)
-- **Export options** — Save to Navidrome or download as .m3u
+- **Artist diversity** — Candidates are capped at 15 tracks per artist so one artist never dominates
+- **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
+- **Multiple AI providers** — Claude (Anthropic) or Gemini (Google); switch per-request in the UI when both keys are configured
+- **Rich metadata** — Scans BPM, mood, composer, label directly from audio files (richer than the Subsonic API)
+- **Export options** — Save directly to Navidrome or download as .m3u
+- **Navidrome status** — Live connection indicator in the header; click to retest
 
 ## Quick Start (Docker)
 
@@ -49,7 +51,7 @@ docker compose up -d --build
 
 Open `http://localhost:8085`
 
-The first scan indexes your full library (may take a few minutes for 30k+ songs). Subsequent scans are incremental and fast. Popularity enrichment runs in the background every 10 minutes.
+The first scan indexes your full library (a few minutes for large collections). Subsequent scans are incremental. Popularity enrichment runs in the background automatically.
 
 ## Unraid Deployment
 
@@ -57,11 +59,13 @@ See [unraid/README.md](unraid/README.md) for detailed instructions. Two options:
 
 ### Option A: Unraid User Script (recommended)
 
-1. Install **Nerd Tools** from Community Apps (for git)
+1. Install the **User Scripts** plugin from Community Applications
 2. Go to **Settings > User Scripts > Add New Script**
 3. Paste the contents of `unraid/deploy-navicraft.sh`
-4. Edit the top of the script — set your music path, port, and credentials
+4. Edit the configuration block at the top — set your music path, Navidrome URL, and API keys
 5. Click **Run Script**
+
+The script always pulls the latest image, prunes old layers, and restarts the container cleanly.
 
 ### Option B: Docker Template
 
@@ -71,42 +75,61 @@ See [unraid/README.md](unraid/README.md) for detailed instructions. Two options:
 
 ## Configuration
 
+### Container environment variables
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MUSIC_DIR` | `/music` | Music directory inside container |
+| `MUSIC_DIR` | `/music` | Music directory inside the container |
 | `NAVIDROME_URL` | `http://localhost:4533` | Navidrome server URL |
 | `NAVIDROME_USER` | `admin` | Navidrome username |
-| `NAVIDROME_PASSWORD` | | Navidrome password |
-| `AI_PROVIDER` | `claude` | `claude` or `gemini` |
-| `CLAUDE_API_KEY` | | Anthropic API key |
-| `CLAUDE_MODEL` | `claude-sonnet-4-20250514` | Claude model |
-| `GEMINI_API_KEY` | | Google AI key |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
-| `LASTFM_API_KEY` | | Last.fm API key ([get one free](https://www.last.fm/api/account/create)) — improves popularity scoring |
-| `SCAN_INTERVAL_HOURS` | `6` | Auto-scan interval |
-| `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,...` | File types to scan |
-| `MAX_CANDIDATES` | `500` | Max songs sent to AI pass 2 |
+| `NAVIDROME_PASSWORD` | — | Navidrome password |
+| `AI_PROVIDER` | `claude` | Default AI provider: `claude` or `gemini` |
+| `CLAUDE_API_KEY` | — | Anthropic API key (requires separate API billing) |
+| `CLAUDE_MODEL` | `claude-3-5-sonnet-20241022` | Claude model identifier |
+| `GEMINI_API_KEY` | — | Google AI API key |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model identifier |
+| `LASTFM_API_KEY` | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
+| `SPOTIFY_CLIENT_ID` | — | Spotify app client ID ([free](https://developer.spotify.com/dashboard)) — best popularity signal |
+| `SPOTIFY_CLIENT_SECRET` | — | Spotify app client secret |
+| `SCAN_INTERVAL_HOURS` | `6` | Background scan interval |
+| `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc` | File types to index |
+| `MAX_CANDIDATES` | `500` | Max songs passed to AI Pass 2 |
 | `DB_PATH` | `/data/navicraft.db` | SQLite database path |
 
-### Docker Compose variables (host-side)
+### Docker Compose host variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MUSIC_PATH` | `/mnt/user/media/music` | Host path to music library (mounted read-only) |
+| `MUSIC_PATH` | `/mnt/user/media/music` | Host path mounted read-only at `/music` |
 | `APPDATA_PATH` | `./data` | Host path for persistent data (SQLite DB) |
-| `NAVICRAFT_PORT` | `8085` | Host port to expose |
+| `NAVICRAFT_PORT` | `8085` | Host port |
+
+> **Note on Claude API:** A Claude.ai subscription (Pro/Team) does **not** include API access. The Anthropic API requires separate credits at [console.anthropic.com](https://console.anthropic.com). Gemini offers a generous free tier and works well as an alternative.
+
+## Popularity Enrichment
+
+NaviCraft scores each track 0–100 using up to four sources, blended by confidence:
+
+| Source | Signal | Notes |
+|--------|--------|-------|
+| **Spotify** | Real streaming popularity (0–100) | Best signal; requires free app credentials |
+| **Last.fm** | Listener count + scrobble ratio | Good; free API key |
+| **MusicBrainz** | Community ratings + release count | Fallback; no key needed |
+| **Track position** | Album position heuristic | +5 for tracks 1–2, +3 for 3–4 |
+
+MusicBrainz is only queried when Spotify and Last.fm lack signal, keeping enrichment fast. Spotify backs off automatically on rate limits (10-minute cooldown after 3 consecutive 429s).
 
 ## Metadata Extracted
 
 NaviCraft reads tags directly from your files using `mutagen`:
 
 - Title, Artist, Album Artist, Album
-- Genre, Year, Track/Disc number
+- Genre, Year, Track / Disc number
 - Duration, BPM, Sample rate, Bitrate
 - Composer, Mood, Comment, Label
 - File format, path, size
 
-This is significantly richer than what the Subsonic API exposes — especially BPM and mood tags, which help the AI make better selections.
+This is richer than what the Subsonic API exposes — especially BPM and mood, which help the AI make better selections.
 
 ## Architecture
 
@@ -119,7 +142,7 @@ navicraft/
 │   ├── scanner.py       # mutagen-based file scanner
 │   ├── ai_engine.py     # Two-pass AI (Claude / Gemini)
 │   ├── navidrome.py     # Subsonic API client
-│   ├── popularity.py    # Last.fm + MusicBrainz enrichment
+│   ├── popularity.py    # Spotify + Last.fm + MusicBrainz enrichment
 │   ├── scheduler.py     # Background scan + enrichment jobs
 │   └── requirements.txt
 ├── frontend/
@@ -138,43 +161,45 @@ navicraft/
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
+| GET | `/api/ai/providers` | List configured AI providers |
 | GET | `/api/navidrome/test` | Test Navidrome connection |
-| GET | `/api/library/stats` | Library stats (counts, duration) |
+| GET | `/api/library/stats` | Library stats (counts, duration, genres) |
 | GET | `/api/library/genres` | All genres with counts |
 | GET | `/api/library/search?q=` | Search tracks by text |
-| POST | `/api/scan?full=false` | Trigger library scan |
+| POST | `/api/scan?full=false` | Trigger library scan (incremental or full) |
 | GET | `/api/scan/status` | Current scan progress |
-| POST | `/api/generate` | Generate playlist (SSE stream, rate limited) |
+| POST | `/api/generate` | Generate playlist — SSE stream, 10s rate limit |
 | POST | `/api/playlists` | Save playlist to Navidrome |
 | GET | `/api/playlists` | List Navidrome playlists |
-| GET | `/api/playlists/history` | Local playlist generation history |
-| DELETE | `/api/playlists/history/:id` | Delete from local history |
 | DELETE | `/api/playlists/:id` | Delete from Navidrome |
+| POST | `/api/popularity/enrich` | Manually trigger an enrichment batch |
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
-| GET | `/api/popularity/status` | Enrichment progress |
+| GET | `/api/popularity/status` | Enrichment progress (enriched/total/%) |
 | POST | `/api/export/m3u` | Download playlist as .m3u file |
 
-### Generate Request
+### Generate request
 
 ```json
 {
   "prompt": "Upbeat indie rock for a summer road trip",
   "max_songs": 30,
   "target_duration_min": 90,
-  "auto_create": true
+  "auto_create": false,
+  "provider": "gemini"
 }
 ```
 
-The response is an SSE stream with `progress` events (phase updates) followed by a `result` event with the final playlist.
+The response is an SSE stream: `progress` events for each phase, then a `result` event with the full playlist, or an `error` event with the actual error message.
 
 ## Tips
 
 - **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer.
-- **Set up Last.fm.** A free API key dramatically improves playlist quality by letting NaviCraft know which tracks are popular vs. deep cuts.
-- **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them to the SQL query.
-- **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster. Both work well.
-- **Large libraries (50k+):** The two-pass strategy handles this fine. If you notice the AI missing songs, increase `MAX_CANDIDATES` (costs more tokens).
-- **Navidrome ID sync:** NaviCraft matches songs to Navidrome by file path. If paths differ (e.g. symlinks), it falls back to artist+title matching.
+- **Set up Spotify + Last.fm.** Both offer free credentials and together give the best popularity signal.
+- **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
+- **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
+- **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).
+- **Navidrome ID sync:** NaviCraft matches songs to Navidrome by file path. If paths differ (e.g. symlinks), it falls back to artist + title matching.
+- **Manual rescan:** Click the ♪ logo mark in the top-left to trigger an incremental rescan at any time.
 
 ## License
 

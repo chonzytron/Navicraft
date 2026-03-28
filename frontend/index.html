@@ -56,7 +56,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .prompt-wrap:focus-within{border-color:var(--border-focus);box-shadow:0 0 0 3px var(--accent-glow)}
 .prompt-wrap textarea{width:100%;background:none;border:none;outline:none;color:var(--text);font-family:var(--font);font-size:16px;line-height:1.65;resize:vertical;min-height:80px}
 .prompt-wrap textarea::placeholder{color:var(--text-4)}
-.prompt-foot{display:flex;align-items:center;justify-content:space-between;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);gap:14px;flex-wrap:wrap}
+.prompt-foot{display:flex;flex-direction:column;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);gap:14px}
 .prompt-opts{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
 .opt{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text-3)}
 .opt input[type=number]{width:58px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;text-align:center}
@@ -67,7 +67,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .toggle-track.on{background:var(--accent);border-color:var(--accent)}
 .toggle-track.on::after{left:16px;background:#fff}
 
-.btn-gen{background:var(--accent);color:#fff;border:none;padding:10px 30px;border-radius:8px;font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 16px var(--accent-glow);white-space:nowrap}
+.btn-gen{background:var(--accent);color:#fff;border:none;width:100%;padding:11px 30px;border-radius:8px;font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 16px var(--accent-glow)}
 .btn-gen:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 24px var(--accent-glow)}
 .btn-gen:disabled{opacity:.4;cursor:not-allowed}
 
@@ -156,8 +156,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 @media(max-width:600px){
   .app{padding:24px 16px 80px}
   .stats{flex-wrap:wrap}.stat{min-width:45%}
-  .prompt-foot{flex-direction:column;align-items:stretch}.btn-gen{width:100%}
-  .s-album{display:none}.res-actions{flex-direction:column}.hist-item{flex-direction:column;align-items:stretch;gap:8px}.hist-btn{align-self:flex-start}
+  .s-album{display:none}.res-actions{flex-direction:column}
   .prompt-wrap textarea{font-size:15px;min-height:64px}
   .app{max-width:100%}
 }

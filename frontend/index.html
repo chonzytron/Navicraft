@@ -208,8 +208,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
             <button class="mode-btn on" id="modeSongs" onclick="setMode('songs')">Songs</button>
             <button class="mode-btn" id="modeDuration" onclick="setMode('duration')">Duration</button>
           </div>
-          <input type="number" class="mode-input" id="maxSongs" value="25" min="1" max="999" oninput="clampInput(this)">
-          <input type="number" class="mode-input" id="targetMin" value="60" min="1" max="999" oninput="clampInput(this)" style="display:none">
+          <input type="number" class="mode-input" id="maxSongs" value="30" min="1" max="999" oninput="clampInput(this)">
+          <input type="number" class="mode-input" id="targetMin" value="90" min="1" max="999" oninput="clampInput(this)" style="display:none">
         </div>
         <label class="toggle-wrap" onclick="togglePreview(event)">
           <div class="toggle-track on" id="previewToggle"></div>
@@ -424,8 +424,8 @@ async function generate(){
   const prompt=$('#prompt').value.trim();
   if(!prompt){toast('Enter a prompt','error');return}
 
-  const maxSongs=activeMode==='songs'?parseInt($('#maxSongs').value)||25:100;
-  const targetMin=activeMode==='duration'?parseInt($('#targetMin').value)||60:null;
+  const maxSongs=activeMode==='songs'?parseInt($('#maxSongs').value)||30:100;
+  const targetMin=activeMode==='duration'?parseInt($('#targetMin').value)||90:null;
   const autoCreate=!$('#previewToggle').classList.contains('on');
 
   $('#genBtn').disabled=true;

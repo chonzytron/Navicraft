@@ -113,9 +113,15 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .btn-ghost:hover{border-color:var(--text-3);color:var(--text-2)}
 
 /* --- Enrichment indicator --- */
-.enrich-bar{display:none;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:16px;font-size:12px;font-family:var(--mono);color:var(--text-4);align-items:center;gap:8px}
+.enrich-bar{display:none;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:16px;font-family:var(--mono);color:var(--text-4);flex-direction:column;gap:5px}
 .enrich-bar.on{display:flex}
-.enrich-fill{height:3px;background:var(--accent);border-radius:2px;transition:width .5s}
+.enrich-row{display:flex;align-items:center;gap:8px;font-size:11px}
+.enrich-label{width:42px;text-align:right;flex-shrink:0}
+.enrich-track{flex:1;background:var(--surface-3);border-radius:2px;height:3px;min-width:0}
+.enrich-fill{height:3px;border-radius:2px;transition:width .5s;width:0%}
+.enrich-fill.lastfm{background:var(--accent)}
+.enrich-fill.spotify{background:var(--green)}
+.enrich-pct{width:88px;text-align:right;flex-shrink:0;white-space:nowrap}
 
 /* --- Navidrome status --- */
 .nd-pill{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--text-4);cursor:pointer;white-space:nowrap;overflow:hidden;max-width:120px}
@@ -191,8 +197,16 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 
   <!-- Enrichment Progress -->
   <div class="enrich-bar" id="enrichBar">
-    <span id="enrichText">Enriching...</span>
-    <div style="flex:1;background:var(--surface-3);border-radius:2px;height:3px"><div class="enrich-fill" id="enrichFill" style="width:0%"></div></div>
+    <div class="enrich-row">
+      <span class="enrich-label">Last.fm</span>
+      <div class="enrich-track"><div class="enrich-fill lastfm" id="enrichFillLastfm"></div></div>
+      <span class="enrich-pct" id="enrichTextLastfm">0%</span>
+    </div>
+    <div class="enrich-row">
+      <span class="enrich-label">Spotify</span>
+      <div class="enrich-track"><div class="enrich-fill spotify" id="enrichFillSpotify"></div></div>
+      <span class="enrich-pct" id="enrichTextSpotify">0%</span>
+    </div>
   </div>
 
   <!-- Stats -->
@@ -590,10 +604,15 @@ function pollEnrichment(){
   const check=async()=>{
     try{
       const s=await api('/popularity/status');
-      if(s.remaining>0){
+      const incomplete=s.remaining>0||s.spotify_missing>0||s.lastfm_missing>0;
+      if(incomplete){
         $('#enrichBar').classList.add('on');
-        $('#enrichText').textContent=`Enriching: ${num(s.enriched)} / ${num(s.total)} (${s.percent}%)`;
-        $('#enrichFill').style.width=`${s.percent}%`;
+        const lfPct=s.lastfm_percent??0;
+        const spPct=s.spotify_percent??0;
+        $('#enrichFillLastfm').style.width=`${lfPct}%`;
+        $('#enrichTextLastfm').textContent=`${num(s.lastfm_enriched??0)} / ${num(s.total)} (${lfPct}%)`;
+        $('#enrichFillSpotify').style.width=`${spPct}%`;
+        $('#enrichTextSpotify').textContent=`${num(s.spotify_enriched??0)} / ${num(s.total)} (${spPct}%)`;
       }else{
         $('#enrichBar').classList.remove('on');
       }

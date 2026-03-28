@@ -210,17 +210,27 @@ async def re_enrich_popularity():
 
 @app.get("/api/popularity/status")
 async def popularity_status():
-    """Check how many tracks still need popularity enrichment."""
+    """Check enrichment coverage across all sources."""
     with db.get_db() as conn:
-        remaining = db.count_tracks_without_popularity(conn)
         total = db.execute_count(conn, "SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL")
+        remaining = db.count_tracks_without_popularity(conn)
+        spotify_missing = db.count_tracks_missing_spotify(conn)
+        lastfm_missing = db.count_tracks_missing_lastfm(conn)
     enriched = total - remaining
+    spotify_enriched = total - spotify_missing
+    lastfm_enriched = total - lastfm_missing
     return {
         "total": total,
         "enriched": enriched,
         "remaining": remaining,
         "percent": round(enriched / total * 100, 1) if total > 0 else 0,
         "running": _enrichment_running,
+        "spotify_enriched": spotify_enriched,
+        "spotify_missing": spotify_missing,
+        "spotify_percent": round(spotify_enriched / total * 100, 1) if total > 0 else 0,
+        "lastfm_enriched": lastfm_enriched,
+        "lastfm_missing": lastfm_missing,
+        "lastfm_percent": round(lastfm_enriched / total * 100, 1) if total > 0 else 0,
     }
 
 

@@ -612,15 +612,78 @@ async def enrich_popularity(batch_size: int = 500):
 
                     logger.info("Popularity: Spotify top-up done — %d tracks updated", spotify_topup)
 
+            # --- Last.fm top-up pass ---
+            # Fill in tracks that are missing Last.fm data (e.g. enriched when Last.fm was down,
+            # or newly added tracks that got Spotify data but no Last.fm yet).
+            lastfm_topup = 0
+            if has_lastfm:
+                with db.get_db() as conn:
+                    missing_lastfm = db.get_tracks_missing_lastfm(conn, limit=batch_size)
+
+                if missing_lastfm:
+                    logger.info("Popularity: Last.fm top-up — %d tracks missing Last.fm data", len(missing_lastfm))
+                    lastfm_topup_pending: list[tuple] = []
+
+                    for track in missing_lastfm:
+                        artist = track.get("artist", "")
+                        title = track.get("title", "")
+                        if not artist or not title:
+                            continue
+
+                        lastfm_result = await _lookup_lastfm(client, artist, title)
+                        await asyncio.sleep(LASTFM_DELAY)
+
+                        if lastfm_result is None:
+                            continue  # not found on Last.fm, leave as-is
+
+                        # Reblend with existing Spotify/MB data already stored in DB
+                        spotify_result = None
+                        if track.get("spotify_popularity") is not None:
+                            spotify_result = {"popularity": track["spotify_popularity"]}
+                        mb_result = None
+                        if track.get("mb_rating") is not None:
+                            mb_result = {
+                                "mb_rating": track["mb_rating"],
+                                "mb_rating_count": track.get("mb_rating_count", 0),
+                            }
+
+                        new_popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track.get("track_number"))
+                        lastfm_topup_pending.append((
+                            new_popularity,
+                            lastfm_result.get("listeners"),
+                            lastfm_result.get("playcount"),
+                            track["id"],
+                        ))
+                        lastfm_topup += 1
+
+                        if len(lastfm_topup_pending) >= WRITE_BATCH:
+                            with db.get_db() as conn:
+                                db.update_lastfm_popularity(conn, lastfm_topup_pending)
+                            lastfm_topup_pending.clear()
+
+                    if lastfm_topup_pending:
+                        with db.get_db() as conn:
+                            db.update_lastfm_popularity(conn, lastfm_topup_pending)
+
+                    logger.info("Popularity: Last.fm top-up done — %d tracks updated", lastfm_topup)
+
         # Check remaining
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
             missing_spotify = db.count_tracks_missing_spotify(conn)
+            missing_lastfm = db.count_tracks_missing_lastfm(conn)
 
         logger.info(
-            "Popularity enrichment done: %d enriched, %d skipped, %d remaining, %d missing Spotify",
-            enriched, skipped, remaining, missing_spotify
+            "Popularity enrichment done: %d enriched, %d skipped, %d remaining, "
+            "%d missing Spotify, %d missing Last.fm",
+            enriched, skipped, remaining, missing_spotify, missing_lastfm
         )
-        return {"enriched": enriched, "skipped": skipped, "total_remaining": remaining, "missing_spotify": missing_spotify}
+        return {
+            "enriched": enriched,
+            "skipped": skipped,
+            "total_remaining": remaining,
+            "missing_spotify": missing_spotify,
+            "missing_lastfm": missing_lastfm,
+        }
     finally:
         _enrichment_lock.release()

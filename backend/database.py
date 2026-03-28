@@ -411,6 +411,41 @@ def count_tracks_missing_spotify(db: sqlite3.Connection) -> int:
     return row["cnt"]
 
 
+def get_tracks_missing_lastfm(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
+    """Get tracks that have been enriched but are missing Last.fm data.
+    Returns existing Spotify/MB values so the score can be reblended."""
+    rows = db.execute("""
+        SELECT id, title, artist, track_number,
+               spotify_popularity,
+               mb_rating, mb_rating_count
+        FROM tracks
+        WHERE popularity IS NOT NULL
+          AND lastfm_listeners IS NULL
+          AND title IS NOT NULL
+        ORDER BY id
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_tracks_missing_lastfm(db: sqlite3.Connection) -> int:
+    """Count enriched tracks that still have no Last.fm data."""
+    row = db.execute("""
+        SELECT COUNT(*) as cnt FROM tracks
+        WHERE popularity IS NOT NULL AND lastfm_listeners IS NULL AND title IS NOT NULL
+    """).fetchone()
+    return row["cnt"]
+
+
+def update_lastfm_popularity(db: sqlite3.Connection, rows: list[tuple]):
+    """Patch Last.fm + reblended popularity for tracks that already have other source data.
+    Each row: (popularity, lastfm_listeners, lastfm_playcount, track_id)
+    """
+    db.executemany("""
+        UPDATE tracks SET popularity = ?, lastfm_listeners = ?, lastfm_playcount = ? WHERE id = ?
+    """, rows)
+
+
 def update_spotify_popularity(db: sqlite3.Connection, rows: list[tuple]):
     """Patch Spotify + reblended popularity for tracks that already have other source data.
     Each row: (popularity, spotify_popularity, track_id)
@@ -438,7 +473,8 @@ def reset_popularity(db: sqlite3.Connection):
     """Reset all popularity scores so they can be re-enriched."""
     db.execute("""
         UPDATE tracks SET popularity = NULL, mb_rating = NULL,
-               mb_rating_count = 0, lastfm_listeners = NULL, lastfm_playcount = NULL
+               mb_rating_count = 0, lastfm_listeners = NULL, lastfm_playcount = NULL,
+               spotify_popularity = NULL
     """)
     count = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL").fetchone()["cnt"]
     return count

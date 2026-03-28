@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS scan_log (
     status          TEXT DEFAULT 'running'
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+    key     TEXT PRIMARY KEY,
+    value   TEXT NOT NULL
+);
+
 """
 
 
@@ -512,5 +517,18 @@ def bulk_update_popularity(db: sqlite3.Connection, rows: list[tuple]):
             spotify_id = ?
         WHERE id = ?
     """, rows)
+
+
+# --- Settings ---
+
+def get_setting(db: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    """Get a persistent setting value."""
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(db: sqlite3.Connection, key: str, value: str):
+    """Persist a setting value."""
+    db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
 

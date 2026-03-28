@@ -130,6 +130,17 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
         return None
 
 
+def _set_spotify_cooldown(seconds: int):
+    """Set the Spotify rate-limit cooldown and persist it to DB so restarts respect it."""
+    global _spotify_blocked_until
+    _spotify_blocked_until = time.time() + seconds
+    try:
+        with db.get_db() as conn:
+            db.set_setting(conn, "spotify_blocked_until", str(_spotify_blocked_until))
+    except Exception as e:
+        logger.debug("Could not persist Spotify cooldown: %s", e)
+
+
 async def _batch_lookup_spotify(
     client: httpx.AsyncClient, spotify_ids: list[str], token: str
 ) -> dict[str, dict] | None:
@@ -466,6 +477,24 @@ async def enrich_popularity(batch_size: int = 500):
 
     await _enrichment_lock.acquire()
     try:
+        global _spotify_blocked_until
+
+        # Restore Spotify cooldown from DB on first run after a restart
+        if _spotify_blocked_until == 0:
+            try:
+                with db.get_db() as conn:
+                    stored = db.get_setting(conn, "spotify_blocked_until")
+                if stored:
+                    val = float(stored)
+                    if val > time.time():
+                        _spotify_blocked_until = val
+                        logger.info(
+                            "Popularity: Spotify cooldown restored from DB — %ds remaining",
+                            int(val - time.time()),
+                        )
+            except Exception:
+                pass
+
         with db.get_db() as conn:
             tracks = db.get_tracks_without_popularity(conn, limit=batch_size)
 
@@ -489,7 +518,6 @@ async def enrich_popularity(batch_size: int = 500):
             timeout=15,
             headers={"User-Agent": MB_USER_AGENT, "Accept": "application/json"},
         ) as client:
-            global _spotify_blocked_until
             # Get Spotify token if configured
             spotify_token = None
             if has_spotify:
@@ -540,7 +568,7 @@ async def enrich_popularity(batch_size: int = 500):
                                         retry_after,
                                         raw.get("retry_after"),
                                     )
-                                    _spotify_blocked_until = time.time() + retry_after
+                                    _set_spotify_cooldown(retry_after)
                                     spotify_token = None  # skip Spotify for rest of batch
                             else:
                                 spotify_consecutive_429s = 0
@@ -631,7 +659,7 @@ async def enrich_popularity(batch_size: int = 500):
                             logger.warning(
                                 "Popularity: Spotify batch rate-limited — disabling for %ds", retry_after
                             )
-                            _spotify_blocked_until = time.time() + retry_after
+                            _set_spotify_cooldown(retry_after)
                             spotify_token = None
                             break
 
@@ -668,7 +696,7 @@ async def enrich_popularity(batch_size: int = 500):
                             logger.warning(
                                 "Popularity: Spotify rate-limited during search top-up — disabling for %ds", retry_after
                             )
-                            _spotify_blocked_until = time.time() + retry_after
+                            _set_spotify_cooldown(retry_after)
                             spotify_token = None
                             break
 

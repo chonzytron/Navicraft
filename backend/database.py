@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     mb_rating_count INTEGER DEFAULT 0,
     lastfm_listeners INTEGER,
     lastfm_playcount INTEGER,
-    spotify_popularity INTEGER
+    spotify_popularity INTEGER,
+    spotify_id      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
@@ -85,6 +86,7 @@ def _migrate(conn: sqlite3.Connection):
         ("lastfm_listeners", "INTEGER"),
         ("lastfm_playcount", "INTEGER"),
         ("spotify_popularity", "INTEGER"),
+        ("spotify_id", "TEXT"),
     ]
     for col, typ in migrations:
         if col not in columns:
@@ -387,11 +389,13 @@ def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> l
 
 def get_tracks_missing_spotify(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
     """Get tracks that have been enriched but are missing Spotify data.
-    Returns existing Last.fm/MB values so the score can be reblended."""
+    Returns existing Last.fm/MB values so the score can be reblended.
+    spotify_id is included: if set, the batch endpoint can be used instead of search."""
     rows = db.execute("""
         SELECT id, title, artist, track_number,
                lastfm_listeners, lastfm_playcount,
-               mb_rating, mb_rating_count
+               mb_rating, mb_rating_count,
+               spotify_id
         FROM tracks
         WHERE popularity IS NOT NULL
           AND spotify_popularity IS NULL
@@ -448,10 +452,10 @@ def update_lastfm_popularity(db: sqlite3.Connection, rows: list[tuple]):
 
 def update_spotify_popularity(db: sqlite3.Connection, rows: list[tuple]):
     """Patch Spotify + reblended popularity for tracks that already have other source data.
-    Each row: (popularity, spotify_popularity, track_id)
+    Each row: (popularity, spotify_popularity, spotify_id, track_id)
     """
     db.executemany("""
-        UPDATE tracks SET popularity = ?, spotify_popularity = ? WHERE id = ?
+        UPDATE tracks SET popularity = ?, spotify_popularity = ?, spotify_id = ? WHERE id = ?
     """, rows)
 
 
@@ -474,7 +478,7 @@ def reset_popularity(db: sqlite3.Connection):
     db.execute("""
         UPDATE tracks SET popularity = NULL, mb_rating = NULL,
                mb_rating_count = 0, lastfm_listeners = NULL, lastfm_playcount = NULL,
-               spotify_popularity = NULL
+               spotify_popularity = NULL, spotify_id = NULL
     """)
     count = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL").fetchone()["cnt"]
     return count
@@ -499,12 +503,13 @@ def bulk_update_popularity(db: sqlite3.Connection, rows: list[tuple]):
     """
     Batch-update popularity for multiple tracks in one transaction.
     Each row: (popularity, mb_rating, mb_rating_count, lastfm_listeners,
-               lastfm_playcount, spotify_popularity, track_id)
+               lastfm_playcount, spotify_popularity, spotify_id, track_id)
     """
     db.executemany("""
         UPDATE tracks
         SET popularity = ?, mb_rating = ?, mb_rating_count = ?,
-            lastfm_listeners = ?, lastfm_playcount = ?, spotify_popularity = ?
+            lastfm_listeners = ?, lastfm_playcount = ?, spotify_popularity = ?,
+            spotify_id = ?
         WHERE id = ?
     """, rows)
 

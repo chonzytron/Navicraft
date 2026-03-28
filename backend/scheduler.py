@@ -34,19 +34,25 @@ async def _scheduled_scan():
 async def _scheduled_enrichment():
     """
     Continuously enrich tracks with popularity data.
-    Runs every 10 minutes, processing 500 tracks per batch.
-    At ~1.1s per track (MusicBrainz rate limit), 500 tracks takes ~9 minutes,
-    so this keeps the enrichment pipeline running back-to-back until all
-    tracks are scored.
+    Runs every 2 minutes, processing 500 tracks per batch.
+    Covers three cases:
+    - New tracks needing full enrichment (popularity IS NULL)
+    - Tracks missing Spotify data (added when Spotify was rate-limited)
+    - Tracks missing Last.fm data (added when Last.fm was unavailable)
     """
     try:
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
+            missing_spotify = db.count_tracks_missing_spotify(conn)
+            missing_lastfm = db.count_tracks_missing_lastfm(conn)
 
-        if remaining == 0:
+        if remaining == 0 and missing_spotify == 0 and missing_lastfm == 0:
             return
 
-        logger.info("Enrichment job: %d tracks remaining", remaining)
+        logger.info(
+            "Enrichment job: %d unscored, %d missing Spotify, %d missing Last.fm",
+            remaining, missing_spotify, missing_lastfm,
+        )
         result = await popularity.enrich_popularity(batch_size=500)
         logger.info("Enrichment job done: %s", result)
     except Exception:

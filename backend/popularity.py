@@ -44,7 +44,7 @@ LASTFM_DELAY = 0.25  # 5 req/sec allowed
 # --- Spotify ---
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
-SPOTIFY_DELAY = 1.0  # ~1 req/s — Spotify Client Credentials search endpoint allows ~60 req/min
+SPOTIFY_DELAY = 0.5  # ~2 req/s — well within Spotify's ~250 req/30s Client Credentials limit
 
 # Spotify token cache
 _spotify_token: str | None = None
@@ -118,15 +118,55 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
         for track in tracks:
             track_artists = [a["name"].lower() for a in track.get("artists", [])]
             if any(artist_lower in a or a in artist_lower for a in track_artists):
-                return {"popularity": track.get("popularity", 0)}
+                return {"popularity": track.get("popularity", 0), "spotify_id": track.get("id")}
 
-        return {"popularity": tracks[0].get("popularity", 0)}
+        return {"popularity": tracks[0].get("popularity", 0), "spotify_id": tracks[0].get("id")}
 
     except (httpx.HTTPStatusError, ValueError, KeyError) as e:
         logger.debug("Spotify lookup failed for '%s - %s': %s", artist, title, e)
         return None
     except Exception as e:
         logger.debug("Spotify error for '%s - %s': %s", artist, title, e)
+        return None
+
+
+async def _batch_lookup_spotify(
+    client: httpx.AsyncClient, spotify_ids: list[str], token: str
+) -> dict[str, dict] | None:
+    """
+    Fetch up to 50 tracks at once using the batch endpoint GET /v1/tracks?ids=...
+    Returns a dict mapping spotify_id → {"popularity": N, "spotify_id": id},
+    or {"rate_limited": True, "retry_after": N} on 429.
+    Much more efficient than individual searches for tracks we already have IDs for.
+    """
+    try:
+        resp = await client.get(
+            "https://api.spotify.com/v1/tracks",
+            params={"ids": ",".join(spotify_ids[:50])},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            return {"rate_limited": True, "retry_after": int(retry_after) if retry_after and retry_after.isdigit() else None}
+        if resp.status_code == 401:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+
+        result = {}
+        for track in data.get("tracks", []):
+            if track and track.get("id"):
+                result[track["id"]] = {
+                    "popularity": track.get("popularity", 0),
+                    "spotify_id": track["id"],
+                }
+        return result
+
+    except (httpx.HTTPStatusError, ValueError, KeyError) as e:
+        logger.debug("Spotify batch lookup failed: %s", e)
+        return None
+    except Exception as e:
+        logger.debug("Spotify batch error: %s", e)
         return None
 
 
@@ -429,22 +469,8 @@ async def enrich_popularity(batch_size: int = 500):
         with db.get_db() as conn:
             tracks = db.get_tracks_without_popularity(conn, limit=batch_size)
 
-        if not tracks:
-            logger.info("Popularity: all tracks already enriched")
-            return {"enriched": 0, "skipped": 0, "total_remaining": 0}
-
-        logger.info("Popularity: enriching %d tracks", len(tracks))
-
         has_lastfm = bool(config.lastfm_api_key)
         has_spotify = bool(config.spotify_client_id and config.spotify_client_secret)
-
-        sources = []
-        if has_spotify:
-            sources.append("Spotify")
-        if has_lastfm:
-            sources.append("Last.fm")
-        sources.append("MusicBrainz (fallback)")
-        logger.info("Popularity: sources — %s", " + ".join(sources))
 
         enriched = 0
         skipped = 0
@@ -475,117 +501,106 @@ async def enrich_popularity(batch_size: int = 500):
                     if not spotify_token:
                         logger.warning("Popularity: Spotify token failed, continuing without Spotify")
 
+            if not tracks:
+                logger.info("Popularity: all tracks already enriched — checking Spotify top-up")
+            else:
+                sources = []
+                if spotify_token:
+                    sources.append("Spotify")
+                if has_lastfm:
+                    sources.append("Last.fm")
+                sources.append("MusicBrainz (fallback)")
+                logger.info("Popularity: enriching %d tracks via %s", len(tracks), " + ".join(sources))
+
             spotify_consecutive_429s = 0
             SPOTIFY_429_LIMIT = 1  # disable Spotify immediately on the first 429
 
-            for track in tracks:
-                artist = track.get("artist", "")
-                title = track.get("title", "")
-                track_number = track.get("track_number")
+            if tracks:
+                for track in tracks:
+                    artist = track.get("artist", "")
+                    title = track.get("title", "")
+                    track_number = track.get("track_number")
 
-                if not artist or not title:
-                    pending.append((30, None, 0, None, None, None, track["id"]))
-                    skipped += 1
-                else:
-                    # Spotify
-                    spotify_result = None
-                    if spotify_token:
-                        raw = await _lookup_spotify(client, artist, title, spotify_token)
-                        await asyncio.sleep(SPOTIFY_DELAY)
-                        if raw and raw.get("rate_limited"):
-                            spotify_consecutive_429s += 1
-                            if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
-                                retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
-                                logger.warning(
-                                    "Popularity: Spotify rate-limited — "
-                                    "disabling for %ds (Retry-After: %s)",
-                                    retry_after,
-                                    raw.get("retry_after"),
-                                )
-                                _spotify_blocked_until = time.time() + retry_after
-                                spotify_token = None  # skip Spotify for rest of batch
-                        else:
-                            spotify_consecutive_429s = 0
-                            spotify_result = raw
+                    if not artist or not title:
+                        pending.append((30, None, 0, None, None, None, track["id"]))
+                        skipped += 1
+                    else:
+                        # Spotify
+                        spotify_result = None
+                        if spotify_token:
+                            raw = await _lookup_spotify(client, artist, title, spotify_token)
+                            await asyncio.sleep(SPOTIFY_DELAY)
+                            if raw and raw.get("rate_limited"):
+                                spotify_consecutive_429s += 1
+                                if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
+                                    retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
+                                    logger.warning(
+                                        "Popularity: Spotify rate-limited — "
+                                        "disabling for %ds (Retry-After: %s)",
+                                        retry_after,
+                                        raw.get("retry_after"),
+                                    )
+                                    _spotify_blocked_until = time.time() + retry_after
+                                    spotify_token = None  # skip Spotify for rest of batch
+                            else:
+                                spotify_consecutive_429s = 0
+                                spotify_result = raw
 
-                    # Last.fm
-                    lastfm_result = None
-                    if has_lastfm:
-                        lastfm_result = await _lookup_lastfm(client, artist, title)
-                        await asyncio.sleep(LASTFM_DELAY)
+                        # Last.fm
+                        lastfm_result = None
+                        if has_lastfm:
+                            lastfm_result = await _lookup_lastfm(client, artist, title)
+                            await asyncio.sleep(LASTFM_DELAY)
 
-                    # MusicBrainz — only when neither Spotify nor Last.fm returned anything
-                    has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
-                    has_good_lastfm = bool(lastfm_result and lastfm_result.get("listeners") is not None)
-                    mb_result = None
-                    if not (has_good_spotify or has_good_lastfm):
-                        mb_result = await _lookup_musicbrainz(client, artist, title)
-                        await asyncio.sleep(MB_DELAY)
-                        needs_mb_count += 1
+                        # MusicBrainz — only when neither Spotify nor Last.fm returned anything
+                        has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
+                        has_good_lastfm = bool(lastfm_result and lastfm_result.get("listeners") is not None)
+                        mb_result = None
+                        if not (has_good_spotify or has_good_lastfm):
+                            mb_result = await _lookup_musicbrainz(client, artist, title)
+                            await asyncio.sleep(MB_DELAY)
+                            needs_mb_count += 1
 
-                    popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track_number)
-                    pending.append((
-                        popularity,
-                        mb_result.get("mb_rating") if mb_result else None,
-                        mb_result.get("mb_rating_count", 0) if mb_result else 0,
-                        lastfm_result.get("listeners") if lastfm_result else None,
-                        lastfm_result.get("playcount") if lastfm_result else None,
-                        spotify_result.get("popularity") if spotify_result else None,
-                        track["id"],
-                    ))
-                    enriched += 1
+                        popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track_number)
+                        pending.append((
+                            popularity,
+                            mb_result.get("mb_rating") if mb_result else None,
+                            mb_result.get("mb_rating_count", 0) if mb_result else 0,
+                            lastfm_result.get("listeners") if lastfm_result else None,
+                            lastfm_result.get("playcount") if lastfm_result else None,
+                            spotify_result.get("popularity") if spotify_result else None,
+                            spotify_result.get("spotify_id") if spotify_result else None,
+                            track["id"],
+                        ))
+                        enriched += 1
 
-                if len(pending) >= WRITE_BATCH:
-                    flush_pending()
+                    if len(pending) >= WRITE_BATCH:
+                        flush_pending()
 
-                if (enriched + skipped) % 100 == 0:
-                    logger.info("Popularity: %d enriched, %d skipped so far (%d MB lookups)", enriched, skipped, needs_mb_count)
+                    if (enriched + skipped) % 100 == 0:
+                        logger.info("Popularity: %d enriched, %d skipped so far (%d MB lookups)", enriched, skipped, needs_mb_count)
 
-            flush_pending()  # write any remaining tracks
+                flush_pending()  # write any remaining tracks
 
             # --- Spotify top-up pass ---
-            # If Spotify is currently working, go back and fill in tracks that were
-            # enriched without Spotify data (e.g. enriched during a prior cooldown).
+            # Fill in tracks enriched without Spotify data (e.g. during a prior cooldown).
+            # Strategy: tracks with a stored spotify_id → single batch request (50 at once,
+            # ~50x fewer API calls). Tracks without an ID → individual search.
             spotify_topup = 0
-            if spotify_token and not spotify_token is None:
+            if spotify_token:
                 with db.get_db() as conn:
                     missing_spotify = db.get_tracks_missing_spotify(conn, limit=batch_size)
 
                 if missing_spotify:
-                    logger.info("Popularity: Spotify top-up — %d tracks missing Spotify data", len(missing_spotify))
+                    have_id = [t for t in missing_spotify if t.get("spotify_id")]
+                    need_search = [t for t in missing_spotify if not t.get("spotify_id")]
+                    logger.info(
+                        "Popularity: Spotify top-up — %d tracks missing (%d batch, %d search)",
+                        len(missing_spotify), len(have_id), len(need_search),
+                    )
                     topup_pending: list[tuple] = []
 
-                    for track in missing_spotify:
-                        if _spotify_blocked_until and time.time() < _spotify_blocked_until:
-                            break  # still in cooldown mid-pass, stop cleanly
-
-                        artist = track.get("artist", "")
-                        title = track.get("title", "")
-                        if not artist or not title:
-                            continue
-
-                        raw = await _lookup_spotify(client, artist, title, spotify_token)
-                        await asyncio.sleep(SPOTIFY_DELAY)
-
-                        if raw and raw.get("rate_limited"):
-                            spotify_consecutive_429s += 1
-                            if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
-                                retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
-                                logger.warning(
-                                    "Popularity: Spotify rate-limited during top-up — "
-                                    "disabling for %ds (Retry-After: %s)",
-                                    retry_after,
-                                    raw.get("retry_after"),
-                                )
-                                _spotify_blocked_until = time.time() + retry_after
-                                break
-                            continue
-
-                        spotify_consecutive_429s = 0
-                        if raw is None:
-                            continue  # track not found on Spotify, leave as-is
-
-                        # Reblend with existing Last.fm/MB data already stored in DB
+                    def _topup_row(track, raw):
                         lastfm_result = None
                         if track.get("lastfm_listeners") is not None:
                             lastfm_result = {
@@ -598,9 +613,70 @@ async def enrich_popularity(batch_size: int = 500):
                                 "mb_rating": track["mb_rating"],
                                 "mb_rating_count": track.get("mb_rating_count", 0),
                             }
+                        new_pop = _blend_scores(raw, lastfm_result, mb_result, track.get("track_number"))
+                        return (new_pop, raw["popularity"], raw.get("spotify_id"), track["id"])
 
-                        new_popularity = _blend_scores(raw, lastfm_result, mb_result, track.get("track_number"))
-                        topup_pending.append((new_popularity, raw["popularity"], track["id"]))
+                    # Pass 1: batch lookups for tracks with known Spotify IDs (50 per request)
+                    BATCH_SIZE = 50
+                    for i in range(0, len(have_id), BATCH_SIZE):
+                        if _spotify_blocked_until and time.time() < _spotify_blocked_until:
+                            break
+                        chunk = have_id[i:i + BATCH_SIZE]
+                        ids = [t["spotify_id"] for t in chunk]
+                        batch_result = await _batch_lookup_spotify(client, ids, spotify_token)
+                        await asyncio.sleep(SPOTIFY_DELAY)
+
+                        if isinstance(batch_result, dict) and batch_result.get("rate_limited"):
+                            retry_after = batch_result.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
+                            logger.warning(
+                                "Popularity: Spotify batch rate-limited — disabling for %ds", retry_after
+                            )
+                            _spotify_blocked_until = time.time() + retry_after
+                            spotify_token = None
+                            break
+
+                        if not batch_result:
+                            continue
+
+                        id_to_track = {t["spotify_id"]: t for t in chunk}
+                        for spot_id, raw in batch_result.items():
+                            track = id_to_track.get(spot_id)
+                            if track:
+                                topup_pending.append(_topup_row(track, raw))
+                                spotify_topup += 1
+
+                        if len(topup_pending) >= WRITE_BATCH:
+                            with db.get_db() as conn:
+                                db.update_spotify_popularity(conn, topup_pending)
+                            topup_pending.clear()
+
+                    # Pass 2: individual searches for tracks without a Spotify ID
+                    for track in need_search:
+                        if not spotify_token or (_spotify_blocked_until and time.time() < _spotify_blocked_until):
+                            break
+
+                        artist = track.get("artist", "")
+                        title = track.get("title", "")
+                        if not artist or not title:
+                            continue
+
+                        raw = await _lookup_spotify(client, artist, title, spotify_token)
+                        await asyncio.sleep(SPOTIFY_DELAY)
+
+                        if raw and raw.get("rate_limited"):
+                            retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
+                            logger.warning(
+                                "Popularity: Spotify rate-limited during search top-up — disabling for %ds", retry_after
+                            )
+                            _spotify_blocked_until = time.time() + retry_after
+                            spotify_token = None
+                            break
+
+                        if raw is None:
+                            continue
+
+                        spotify_consecutive_429s = 0
+                        topup_pending.append(_topup_row(track, raw))
                         spotify_topup += 1
 
                         if len(topup_pending) >= WRITE_BATCH:
@@ -614,15 +690,78 @@ async def enrich_popularity(batch_size: int = 500):
 
                     logger.info("Popularity: Spotify top-up done — %d tracks updated", spotify_topup)
 
+            # --- Last.fm top-up pass ---
+            # Fill in tracks that are missing Last.fm data (e.g. enriched when Last.fm was down,
+            # or newly added tracks that got Spotify data but no Last.fm yet).
+            lastfm_topup = 0
+            if has_lastfm:
+                with db.get_db() as conn:
+                    missing_lastfm = db.get_tracks_missing_lastfm(conn, limit=batch_size)
+
+                if missing_lastfm:
+                    logger.info("Popularity: Last.fm top-up — %d tracks missing Last.fm data", len(missing_lastfm))
+                    lastfm_topup_pending: list[tuple] = []
+
+                    for track in missing_lastfm:
+                        artist = track.get("artist", "")
+                        title = track.get("title", "")
+                        if not artist or not title:
+                            continue
+
+                        lastfm_result = await _lookup_lastfm(client, artist, title)
+                        await asyncio.sleep(LASTFM_DELAY)
+
+                        if lastfm_result is None:
+                            continue  # not found on Last.fm, leave as-is
+
+                        # Reblend with existing Spotify/MB data already stored in DB
+                        spotify_result = None
+                        if track.get("spotify_popularity") is not None:
+                            spotify_result = {"popularity": track["spotify_popularity"]}
+                        mb_result = None
+                        if track.get("mb_rating") is not None:
+                            mb_result = {
+                                "mb_rating": track["mb_rating"],
+                                "mb_rating_count": track.get("mb_rating_count", 0),
+                            }
+
+                        new_popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track.get("track_number"))
+                        lastfm_topup_pending.append((
+                            new_popularity,
+                            lastfm_result.get("listeners"),
+                            lastfm_result.get("playcount"),
+                            track["id"],
+                        ))
+                        lastfm_topup += 1
+
+                        if len(lastfm_topup_pending) >= WRITE_BATCH:
+                            with db.get_db() as conn:
+                                db.update_lastfm_popularity(conn, lastfm_topup_pending)
+                            lastfm_topup_pending.clear()
+
+                    if lastfm_topup_pending:
+                        with db.get_db() as conn:
+                            db.update_lastfm_popularity(conn, lastfm_topup_pending)
+
+                    logger.info("Popularity: Last.fm top-up done — %d tracks updated", lastfm_topup)
+
         # Check remaining
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
             missing_spotify = db.count_tracks_missing_spotify(conn)
+            missing_lastfm = db.count_tracks_missing_lastfm(conn)
 
         logger.info(
-            "Popularity enrichment done: %d enriched, %d skipped, %d remaining, %d missing Spotify",
-            enriched, skipped, remaining, missing_spotify
+            "Popularity enrichment done: %d enriched, %d skipped, %d remaining, "
+            "%d missing Spotify, %d missing Last.fm",
+            enriched, skipped, remaining, missing_spotify, missing_lastfm
         )
-        return {"enriched": enriched, "skipped": skipped, "total_remaining": remaining, "missing_spotify": missing_spotify}
+        return {
+            "enriched": enriched,
+            "skipped": skipped,
+            "total_remaining": remaining,
+            "missing_spotify": missing_spotify,
+            "missing_lastfm": missing_lastfm,
+        }
     finally:
         _enrichment_lock.release()

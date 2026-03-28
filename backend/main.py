@@ -38,13 +38,13 @@ _last_generate_time = 0.0
 _GENERATE_COOLDOWN = 10  # seconds
 
 
-def _default_server() -> str:
-    """Return the first configured media server ID."""
+def _default_server() -> Optional[str]:
+    """Return the first configured media server ID, or None if neither is configured."""
     if config.navidrome_url and config.navidrome_password:
         return "navidrome"
     if config.plex_url and config.plex_token:
         return "plex"
-    return "navidrome"  # fallback
+    return None
 
 
 @asynccontextmanager
@@ -424,6 +424,10 @@ async def generate_playlist(req: GenerateRequest):
             # --- Auto-create ---
             if req.auto_create and matched_songs:
                 target = req.server or _default_server()
+                if not target:
+                    result["auto_create_error"] = "No media server configured. Set up Navidrome or Plex."
+                    yield sse("result", result)
+                    return
                 id_field = "plex_id" if target == "plex" else "navidrome_id"
                 server_ids = [t[id_field] for t in matched_songs if t.get(id_field)]
                 server_label = "Plex" if target == "plex" else "Navidrome"
@@ -468,6 +472,8 @@ async def generate_playlist(req: GenerateRequest):
 @app.post("/api/playlists")
 async def create_playlist_route(req: CreatePlaylistRequest):
     target = req.server or _default_server()
+    if not target:
+        raise HTTPException(400, detail="No media server configured. Set up Navidrome or Plex.")
     try:
         if target == "plex":
             pl = await plex.create_playlist(req.name, req.song_ids)
@@ -481,6 +487,8 @@ async def create_playlist_route(req: CreatePlaylistRequest):
 @app.get("/api/playlists")
 async def list_playlists(server: Optional[str] = None):
     target = server or _default_server()
+    if not target:
+        raise HTTPException(400, detail="No media server configured. Set up Navidrome or Plex.")
     try:
         if target == "plex":
             return await plex.get_playlists()
@@ -494,6 +502,8 @@ async def list_playlists(server: Optional[str] = None):
 async def delete_playlist(playlist_id: str, server: Optional[str] = None):
     """Delete a playlist from the target media server."""
     target = server or _default_server()
+    if not target:
+        raise HTTPException(400, detail="No media server configured. Set up Navidrome or Plex.")
     try:
         if target == "plex":
             await plex.delete_playlist(playlist_id)

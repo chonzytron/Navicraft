@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 # Cached after first successful connection
 _machine_identifier: str | None = None
 
+_RETRYABLE = (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout)
+
 
 def _headers() -> dict:
     return {
@@ -30,57 +32,39 @@ def _api_url(path: str) -> str:
     return f"{config.plex_url.rstrip('/')}{path}"
 
 
-async def _get(path: str, params: dict = None) -> dict:
+async def _request(method: str, path: str, params: dict = None) -> dict | None:
+    """HTTP request with exponential backoff retries."""
     max_retries = 3
     for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.get(_api_url(path), headers=_headers(), params=params or {})
+                resp = await client.request(method, _api_url(path), headers=_headers(), params=params or {})
                 resp.raise_for_status()
-                return resp.json()
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                if method == "DELETE":
+                    return None
+                ct = resp.headers.get("content-type", "")
+                if ct.startswith("application/json"):
+                    return resp.json()
+                return {}
+        except _RETRYABLE as e:
             if attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)
-                logger.warning("Plex request failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
+                logger.warning("Plex %s %s failed (%s), retrying in %ds", method, path, type(e).__name__, wait)
                 await asyncio.sleep(wait)
             else:
                 raise ConnectionError(f"Cannot reach Plex at {config.plex_url}: {type(e).__name__}")
+
+
+async def _get(path: str, params: dict = None) -> dict:
+    return await _request("GET", path, params)
 
 
 async def _post(path: str, params: dict = None) -> dict:
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(_api_url(path), headers=_headers(), params=params or {})
-                resp.raise_for_status()
-                if resp.headers.get("content-type", "").startswith("application/json"):
-                    return resp.json()
-                return {}
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            if attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
-                logger.warning("Plex request failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
-                await asyncio.sleep(wait)
-            else:
-                raise ConnectionError(f"Cannot reach Plex at {config.plex_url}: {type(e).__name__}")
+    return await _request("POST", path, params)
 
 
 async def _delete(path: str) -> None:
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.delete(_api_url(path), headers=_headers())
-                resp.raise_for_status()
-                return
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            if attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
-                logger.warning("Plex request failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
-                await asyncio.sleep(wait)
-            else:
-                raise ConnectionError(f"Cannot reach Plex at {config.plex_url}: {type(e).__name__}")
+    await _request("DELETE", path)
 
 
 async def _get_machine_identifier() -> str:
@@ -161,6 +145,7 @@ async def sync_plex_ids():
     path_map = {}
     title_map = {}
     music_dir = config.music_dir.rstrip("/")
+    tracks_with_paths = 0
 
     for t in all_plex_tracks:
         rating_key = str(t.get("ratingKey", ""))
@@ -180,9 +165,12 @@ async def sync_plex_ids():
                     if plex_path.startswith(music_dir):
                         rel = plex_path[len(music_dir):].lstrip("/")
                         path_map[rel] = rating_key
+                    tracks_with_paths += 1
 
         if plex_artist and plex_title:
             title_map[(plex_artist, plex_title)] = rating_key
+
+    logger.info("Built path map with %d paths, %d artist+title entries", tracks_with_paths, len(title_map))
 
     # Match against local index
     matched = 0
@@ -235,15 +223,15 @@ async def create_playlist(name: str, song_ids: list[str]) -> dict:
 
     mc = data.get("MediaContainer", {})
     playlists = mc.get("Metadata", [])
-    if playlists:
-        pl = playlists[0]
-        return {
-            "id": str(pl.get("ratingKey", "")),
-            "name": pl.get("title", name),
-            "songCount": pl.get("leafCount", len(song_ids)),
-        }
+    if not playlists:
+        raise Exception("Plex did not return playlist data. The playlist may not have been created.")
 
-    return {"id": "", "name": name, "songCount": len(song_ids)}
+    pl = playlists[0]
+    return {
+        "id": str(pl.get("ratingKey", "")),
+        "name": pl.get("title", name),
+        "songCount": pl.get("leafCount", len(song_ids)),
+    }
 
 
 async def get_playlists() -> list[dict]:

@@ -28,9 +28,15 @@ async def _scheduled_scan():
         # Sync media server IDs if any changes
         if stats.get("added", 0) > 0 or stats.get("updated", 0) > 0:
             if config.navidrome_url and config.navidrome_password:
-                await navidrome.sync_navidrome_ids()
+                try:
+                    await navidrome.sync_navidrome_ids()
+                except Exception:
+                    logger.exception("Navidrome ID sync failed during scheduled scan")
             if config.plex_url and config.plex_token:
-                await plex.sync_plex_ids()
+                try:
+                    await plex.sync_plex_ids()
+                except Exception:
+                    logger.exception("Plex ID sync failed during scheduled scan")
     except Exception:
         logger.exception("Scheduled scan failed")
 

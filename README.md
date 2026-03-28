@@ -13,7 +13,9 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Descr
 2. ENRICH (background)
    Query Spotify + Last.fm + MusicBrainz for each track → popularity scores (0–100)
    Higher scores = well-known, beloved tracks
-   Runs automatically every 2 minutes until all tracks are enriched.
+   Runs every 2 minutes; continues until all tracks have data from all available sources.
+   Per-source progress tracked: spotify_checked_at / lastfm_checked_at per track.
+   Confirmed-absent tracks (API responded, no match) are skipped for 24h before retry.
 
 3. GENERATE (two-pass AI)
    Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, exclusions)
@@ -38,6 +40,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Descr
 - **Rich metadata** — Scans BPM, mood, composer, label directly from audio files (richer than the Subsonic API)
 - **Export options** — Save directly to Navidrome or download as .m3u
 - **Navidrome status** — Live connection indicator in the header; click to retest
+- **Dual enrichment progress bars** — Last.fm (purple) and Spotify (green) progress bars visible while either source is still enriching
 
 ## Quick Start (Docker)
 
@@ -117,7 +120,13 @@ NaviCraft scores each track 0–100 using up to four sources, blended by confide
 | **MusicBrainz** | Community ratings + release count | Fallback; no key needed |
 | **Track position** | Album position heuristic | +5 for tracks 1–2, +3 for 3–4 |
 
-MusicBrainz is only queried when Spotify and Last.fm lack signal, keeping enrichment fast. Spotify backs off automatically on rate limits (10-minute cooldown after 3 consecutive 429s).
+MusicBrainz is only queried when Spotify and Last.fm lack signal, keeping enrichment fast.
+
+**Spotify rate limiting:** The `Retry-After` header from 429 responses is honored exactly (server-side blocks can be hours long). The cooldown timestamp is persisted to the SQLite `settings` table so a container restart doesn't trigger a wasted attempt during an active block. Spotify requests run at 0.5 req/s (2 req/s) to stay well within the ~250 req/30s limit.
+
+**Batch lookups:** Once a track's Spotify ID is stored from the initial search, future top-up passes use `GET /v1/tracks?ids=...` with up to 50 IDs per request — ~50× more efficient than individual searches.
+
+**Not-found backoff:** When an API definitively returns "not found" (200 OK, empty results), the track is flagged with a `checked_at` timestamp and skipped for 24 hours. Transient errors (timeouts, 429s, network failures) are not flagged and retry normally on the next cycle.
 
 ## Metadata Extracted
 
@@ -174,7 +183,7 @@ navicraft/
 | DELETE | `/api/playlists/:id` | Delete from Navidrome |
 | POST | `/api/popularity/enrich` | Manually trigger an enrichment batch |
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
-| GET | `/api/popularity/status` | Enrichment progress (enriched/total/%) |
+| GET | `/api/popularity/status` | Per-source enrichment progress (total, enriched/remaining/percent for overall, Spotify, and Last.fm) |
 | POST | `/api/export/m3u` | Download playlist as .m3u file |
 
 ### Generate request

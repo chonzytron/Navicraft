@@ -42,9 +42,15 @@ unraid/
   - Pass 2: prompt + candidate list → final ordered playlist
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts
 - **Popularity scoring**: Multi-source enrichment (Spotify streaming popularity, Last.fm listeners/playcount, MusicBrainz ratings/release count, track position heuristic). Confidence-weighted blending. MusicBrainz skipped when Spotify/Last.fm already have good signal.
-- **Spotify rate limiting**: `_spotify_blocked_until` global timestamp blocks Spotify for 10 minutes after 3 consecutive 429s. Requests fast-fail (no sleep) on 429.
-- **Spotify top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `spotify_popularity IS NULL` are retroactively enriched using stored Last.fm/MB values for reblending.
+- **Spotify rate limiting**: `_spotify_blocked_until` global timestamp; honors `Retry-After` header from 429 responses (can be hours-long). On cooldown, requests fast-fail without sleeping. Cooldown is persisted to the `settings` DB table so container restarts don't trigger a wasted new attempt during an active server-side block.
+- **Spotify batch lookups**: Once a track's `spotify_id` is stored from the initial search, subsequent top-up passes call `GET /v1/tracks?ids=...` with up to 50 IDs per request — 50× more efficient than individual searches.
+- **Spotify top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `spotify_popularity IS NULL` are retroactively enriched. Tracks with a known `spotify_id` use the batch endpoint; unknown IDs fall back to search.
+- **Last.fm top-up pass**: Mirrors Spotify top-up — after the main batch, tracks with `lastfm_listeners IS NULL` are retroactively enriched using Last.fm search.
+- **24h not-found backoff**: Lookup functions distinguish confirmed-absent tracks (200 OK, empty results → `{"not_found": True}`) from transient errors (`None`). Confirmed-absent tracks have `spotify_checked_at` / `lastfm_checked_at` set and are skipped for 24 hours before retry. Transient errors retry normally on the next enrichment cycle.
+- **Per-track checked timestamps**: `spotify_checked_at` and `lastfm_checked_at` columns (Unix timestamp) track the last definitive API check per source. Missing-source queries filter: `checked_at IS NULL OR (unixepoch() - checked_at) > 86400`.
+- **Settings table**: `settings (key TEXT PRIMARY KEY, value TEXT)` in SQLite for persistent key-value config. Currently used for Spotify cooldown persistence. Accessed via `db.get_setting()` / `db.set_setting()`.
 - **Enrichment lock**: `asyncio.Lock` in `popularity.py` prevents concurrent enrichment runs (startup scan, post-scan trigger, and scheduler all call `enrich_popularity`).
+- **Scheduler checks all sources**: `_scheduled_enrichment()` checks `count_tracks_without_popularity`, `count_tracks_missing_spotify`, and `count_tracks_missing_lastfm` before early-exiting — ensuring top-up passes run even when all tracks have a base score.
 - **SSE streaming** on `/api/generate` for real-time progress feedback. Includes `X-Accel-Buffering: no` and `Cache-Control: no-cache` headers to prevent Nginx proxy buffering.
 - **Rate limiting**: 10s cooldown on `/api/generate` to prevent double-clicks
 - **Navidrome only for playlist creation** — songs matched by file path, fallback to artist+title
@@ -102,7 +108,7 @@ docker compose up -d --build
 | DELETE | `/api/playlists/:id` | Delete from Navidrome |
 | POST | `/api/popularity/enrich` | Manually trigger an enrichment batch |
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
-| GET | `/api/popularity/status` | Enrichment progress (enriched/total/percent/running) |
+| GET | `/api/popularity/status` | Per-source enrichment progress: total, enriched/remaining/percent for overall, Spotify, and Last.fm; `running` flag |
 | POST | `/api/export/m3u` | Download playlist as .m3u file |
 
 ## Key Defaults
@@ -122,10 +128,11 @@ docker compose up -d --build
 | DB write batch size | `50 tracks` | popularity.py |
 | Enrichment job interval | `2 minutes` | scheduler.py |
 | Scan job interval | `6 hours` (configurable) | scheduler.py / config.py |
-| Spotify delay | `0.2s` (5 req/s) | popularity.py |
+| Spotify delay | `0.5s` (2 req/s) | popularity.py |
 | Last.fm delay | `0.25s` (4 req/s) | popularity.py |
 | MusicBrainz delay | `1.1s` | popularity.py |
-| Spotify cooldown on 429 | `600s (10 min)` | popularity.py |
+| Spotify cooldown on 429 | `Retry-After` value (fallback 600s), persisted to DB | popularity.py |
+| Not-found retry window | `86400s (24h)` per track per source | database.py |
 | Default songs in UI | `30` | frontend/index.html |
 | Default duration in UI | `90 min` | frontend/index.html |
 
@@ -138,7 +145,7 @@ docker compose up -d --build
 - **Mode toggle** — Songs (count) or Duration (minutes), one input visible at a time; number inputs have no spinners, clamp to 1–999
 - **Preview toggle** — when ON, shows results before saving; when OFF, auto-saves to Navidrome on generation
 - **SSE progress display** — real-time phase labels and elapsed timer during generation
-- **Enrichment progress bar** — shown while background enrichment is running
+- **Dual enrichment progress bars** — Last.fm (purple) and Spotify (green) bars shown independently while background enrichment is running for either source; each shows percent complete
 - **Export** — Save to Navidrome or download as .m3u
 
 ## Testing Notes

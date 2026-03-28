@@ -100,6 +100,10 @@ if [ "$BUILD_FROM_SOURCE" = "true" ]; then
     DOCKER_IMAGE="navicraft:latest"
 fi
 
+# Remove dangling images left behind by the pull/build above
+echo "Cleaning up unused images..."
+docker image prune -f
+
 echo "Deploying NaviCraft..."
 echo "  Image:    $DOCKER_IMAGE"
 echo "  Port:     $WEB_PORT"

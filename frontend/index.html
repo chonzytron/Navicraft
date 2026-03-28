@@ -32,7 +32,7 @@ body::before{content:'';position:fixed;inset:0;background:url("data:image/svg+xm
 .app{position:relative;z-index:1;max-width:900px;margin:0 auto;padding:48px 32px 100px}
 
 /* --- Header --- */
-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
 .logo{display:flex;align-items:center;gap:14px}
 .logo-mark{width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#7c3aed);display:grid;place-items:center;font-size:18px;box-shadow:0 0 24px var(--accent-glow),inset 0 1px 0 #fff1;cursor:pointer;transition:transform .15s,box-shadow .15s}
 .logo-mark:hover{transform:scale(1.08);box-shadow:0 0 32px var(--accent-glow),inset 0 1px 0 #fff1}
@@ -117,11 +117,11 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-bar.on{display:flex}
 .enrich-row{display:flex;align-items:center;gap:6px;font-size:11px}
 .enrich-label{width:42px;text-align:right;flex-shrink:0}
-.enrich-track{flex:1;background:var(--surface-3);border-radius:2px;height:3px;min-width:40px}
+.enrich-track{flex:1;background:var(--surface-3);border-radius:2px;height:3px;min-width:0}
 .enrich-fill{height:3px;border-radius:2px;transition:width .5s;width:0%}
 .enrich-fill.lastfm{background:var(--accent)}
 .enrich-fill.spotify{background:var(--green)}
-.enrich-pct{flex-shrink:0;white-space:nowrap;text-align:right}
+.enrich-pct{width:38px;text-align:right;flex-shrink:0}
 
 /* --- Navidrome status --- */
 .nd-pill{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--text-4);cursor:pointer;white-space:nowrap;overflow:hidden;max-width:120px}
@@ -610,9 +610,9 @@ function pollEnrichment(){
         const lfPct=s.lastfm_percent??0;
         const spPct=s.spotify_percent??0;
         $('#enrichFillLastfm').style.width=`${lfPct}%`;
-        $('#enrichTextLastfm').textContent=`${num(s.lastfm_enriched??0)}/${num(s.total)} (${lfPct}%)`;
+        $('#enrichTextLastfm').textContent=`${lfPct}%`;
         $('#enrichFillSpotify').style.width=`${spPct}%`;
-        $('#enrichTextSpotify').textContent=`${num(s.spotify_enriched??0)}/${num(s.total)} (${spPct}%)`;
+        $('#enrichTextSpotify').textContent=`${spPct}%`;
       }else{
         $('#enrichBar').classList.remove('on');
       }

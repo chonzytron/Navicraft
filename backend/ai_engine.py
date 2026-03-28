@@ -136,7 +136,12 @@ async def _call_claude(system: str, user_message: str) -> str:
                 continue
 
             if resp.status_code >= 400:
-                logger.error("Claude API error %d: %s", resp.status_code, resp.text[:1000])
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", resp.text[:300])
+                except Exception:
+                    err_msg = resp.text[:300]
+                logger.error("Claude API error %d: %s", resp.status_code, err_msg)
+                raise ValueError(f"Claude: {err_msg}")
             resp.raise_for_status()
             data = resp.json()
 
@@ -168,7 +173,14 @@ async def _call_gemini(system: str, user_message: str) -> str:
                 continue
 
             if resp.status_code >= 400:
-                logger.error("Gemini API error %d: %s", resp.status_code, resp.text[:1000])
+                try:
+                    body = resp.json()
+                    err_msg = (body.get("error", {}).get("message")
+                               or body.get("message", resp.text[:300]))
+                except Exception:
+                    err_msg = resp.text[:300]
+                logger.error("Gemini API error %d: %s", resp.status_code, err_msg)
+                raise ValueError(f"Gemini: {err_msg}")
             resp.raise_for_status()
             data = resp.json()
 

@@ -56,7 +56,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .prompt-wrap:focus-within{border-color:var(--border-focus);box-shadow:0 0 0 3px var(--accent-glow)}
 .prompt-wrap textarea{width:100%;background:none;border:none;outline:none;color:var(--text);font-family:var(--font);font-size:16px;line-height:1.65;resize:vertical;min-height:80px}
 .prompt-wrap textarea::placeholder{color:var(--text-4)}
-.prompt-foot{display:flex;align-items:center;justify-content:space-between;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);gap:14px;flex-wrap:wrap}
+.prompt-foot{display:flex;flex-direction:column;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);gap:14px}
 .prompt-opts{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
 .opt{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text-3)}
 .opt input[type=number]{width:58px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;text-align:center}
@@ -67,7 +67,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .toggle-track.on{background:var(--accent);border-color:var(--accent)}
 .toggle-track.on::after{left:16px;background:#fff}
 
-.btn-gen{background:var(--accent);color:#fff;border:none;padding:10px 30px;border-radius:8px;font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 16px var(--accent-glow);white-space:nowrap}
+.btn-gen{background:var(--accent);color:#fff;border:none;width:100%;padding:11px 30px;border-radius:8px;font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 16px var(--accent-glow)}
 .btn-gen:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 24px var(--accent-glow)}
 .btn-gen:disabled{opacity:.4;cursor:not-allowed}
 
@@ -113,9 +113,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-fill{height:3px;background:var(--accent);border-radius:2px;transition:width .5s}
 
 /* --- Navidrome status --- */
-.nd-bar{display:none;align-items:center;gap:8px;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:16px;font-size:12px;font-family:var(--mono);color:var(--text-4);cursor:pointer;transition:border-color .15s}
-.nd-bar:hover{border-color:var(--border-hover)}
-.nd-bar.on{display:flex}
+.nd-pill{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--text-4);cursor:pointer;white-space:nowrap;overflow:hidden;max-width:120px}
+.nd-pill:hover{color:var(--text-3)}
 .nd-dot{width:7px;height:7px;border-radius:50%;background:var(--text-4);flex-shrink:0}
 .nd-dot.ok{background:var(--green)}.nd-dot.err{background:var(--red)}
 
@@ -125,7 +124,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .mode-btn{padding:4px 10px;border-radius:4px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;color:var(--text-3);background:transparent;border:none;transition:all .2s}
 .mode-btn:hover{color:var(--text-2)}
 .mode-btn.on{background:var(--surface-3);color:var(--text);box-shadow:0 1px 4px #0006}
-.mode-input{width:54px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;text-align:center}
+.mode-input{width:54px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;text-align:center;-moz-appearance:textfield}
+.mode-input::-webkit-outer-spin-button,.mode-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .mode-input:focus{border-color:var(--border-focus)}
 
 /* --- Provider selector --- */
@@ -156,8 +156,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 @media(max-width:600px){
   .app{padding:24px 16px 80px}
   .stats{flex-wrap:wrap}.stat{min-width:45%}
-  .prompt-foot{flex-direction:column;align-items:stretch}.btn-gen{width:100%}
-  .s-album{display:none}.res-actions{flex-direction:column}.hist-item{flex-direction:column;align-items:stretch;gap:8px}.hist-btn{align-self:flex-start}
+  .s-album{display:none}.res-actions{flex-direction:column}
   .prompt-wrap textarea{font-size:15px;min-height:64px}
   .app{max-width:100%}
 }
@@ -172,6 +171,10 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <div class="logo-mark">&#9835;</div>
       <h1>Navi<span>Craft</span></h1>
     </div>
+    <div class="nd-pill" id="ndBar" onclick="testNavidrome()" title="Click to retest">
+      <div class="nd-dot" id="ndDot"></div>
+      <span id="ndMsg">Navidrome</span>
+    </div>
   </header>
 
   <!-- Scan Progress Bar -->
@@ -185,12 +188,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   <div class="enrich-bar" id="enrichBar">
     <span id="enrichText">Enriching...</span>
     <div style="flex:1;background:var(--surface-3);border-radius:2px;height:3px"><div class="enrich-fill" id="enrichFill" style="width:0%"></div></div>
-  </div>
-
-  <!-- Navidrome Status -->
-  <div class="nd-bar" id="ndBar" onclick="testNavidrome()" title="Click to retest connection">
-    <div class="nd-dot" id="ndDot"></div>
-    <span id="ndMsg">Navidrome</span>
   </div>
 
   <!-- Stats -->
@@ -211,8 +208,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
             <button class="mode-btn on" id="modeSongs" onclick="setMode('songs')">Songs</button>
             <button class="mode-btn" id="modeDuration" onclick="setMode('duration')">Duration</button>
           </div>
-          <input type="number" class="mode-input" id="maxSongs" value="25" min="5" max="100">
-          <input type="number" class="mode-input" id="targetMin" value="60" min="5" max="600" style="display:none">
+          <input type="number" class="mode-input" id="maxSongs" value="25" min="1" max="999" oninput="clampInput(this)">
+          <input type="number" class="mode-input" id="targetMin" value="60" min="1" max="999" oninput="clampInput(this)" style="display:none">
         </div>
         <label class="toggle-wrap" onclick="togglePreview(event)">
           <div class="toggle-track on" id="previewToggle"></div>
@@ -295,6 +292,7 @@ function esc(s){const d=document.createElement('div');d.textContent=s||'';return
 function fmtDur(s){if(!s)return'';const m=Math.floor(s/60),sec=Math.floor(s%60);return`${m}:${String(sec).padStart(2,'0')}`}
 function fmtTotal(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`}
 function num(n){return(n||0).toLocaleString()}
+function clampInput(el){el.value=el.value.replace(/[^0-9]/g,'');if(el.value&&+el.value>999)el.value=999;if(el.value&&+el.value<1)el.value=1}
 
 async function api(path,opts={},timeoutMs=300000){
   const ctrl=new AbortController();
@@ -320,16 +318,13 @@ async function init(){
 
 // --- Navidrome status ---
 async function testNavidrome(){
-  $('#ndBar').classList.add('on');
   $('#ndDot').className='nd-dot';
-  $('#ndMsg').textContent='Navidrome: checking...';
   try{
-    const r=await api('/navidrome/test',{},10000);
+    await api('/navidrome/test',{},10000);
     $('#ndDot').className='nd-dot ok';
-    $('#ndMsg').textContent=`Navidrome v${r.version} connected`;
   }catch(e){
     $('#ndDot').className='nd-dot err';
-    $('#ndMsg').textContent=`Navidrome unreachable — ${e.message}`;
+    toast(`Navidrome unreachable: ${e.message}`,'error');
   }
 }
 

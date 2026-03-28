@@ -113,9 +113,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-fill{height:3px;background:var(--accent);border-radius:2px;transition:width .5s}
 
 /* --- Navidrome status --- */
-.nd-bar{display:none;align-items:center;gap:8px;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:16px;font-size:12px;font-family:var(--mono);color:var(--text-4);cursor:pointer;transition:border-color .15s}
-.nd-bar:hover{border-color:var(--border-hover)}
-.nd-bar.on{display:flex}
+.nd-pill{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--text-4);cursor:pointer;white-space:nowrap;overflow:hidden;max-width:120px}
+.nd-pill:hover{color:var(--text-3)}
 .nd-dot{width:7px;height:7px;border-radius:50%;background:var(--text-4);flex-shrink:0}
 .nd-dot.ok{background:var(--green)}.nd-dot.err{background:var(--red)}
 
@@ -172,6 +171,10 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <div class="logo-mark">&#9835;</div>
       <h1>Navi<span>Craft</span></h1>
     </div>
+    <div class="nd-pill" id="ndBar" onclick="testNavidrome()" title="Click to retest">
+      <div class="nd-dot" id="ndDot"></div>
+      <span id="ndMsg">Navidrome</span>
+    </div>
   </header>
 
   <!-- Scan Progress Bar -->
@@ -185,12 +188,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   <div class="enrich-bar" id="enrichBar">
     <span id="enrichText">Enriching...</span>
     <div style="flex:1;background:var(--surface-3);border-radius:2px;height:3px"><div class="enrich-fill" id="enrichFill" style="width:0%"></div></div>
-  </div>
-
-  <!-- Navidrome Status -->
-  <div class="nd-bar" id="ndBar" onclick="testNavidrome()" title="Click to retest connection">
-    <div class="nd-dot" id="ndDot"></div>
-    <span id="ndMsg">Navidrome</span>
   </div>
 
   <!-- Stats -->
@@ -320,16 +317,13 @@ async function init(){
 
 // --- Navidrome status ---
 async function testNavidrome(){
-  $('#ndBar').classList.add('on');
   $('#ndDot').className='nd-dot';
-  $('#ndMsg').textContent='Navidrome: checking...';
   try{
-    const r=await api('/navidrome/test',{},10000);
+    await api('/navidrome/test',{},10000);
     $('#ndDot').className='nd-dot ok';
-    $('#ndMsg').textContent=`Navidrome v${r.version} connected`;
   }catch(e){
     $('#ndDot').className='nd-dot err';
-    $('#ndMsg').textContent=`Navidrome unreachable — ${e.message}`;
+    toast(`Navidrome unreachable: ${e.message}`,'error');
   }
 }
 

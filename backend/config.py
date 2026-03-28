@@ -12,6 +12,10 @@ class Config:
     navidrome_user: str = field(default_factory=lambda: os.getenv("NAVIDROME_USER", "admin"))
     navidrome_password: str = field(default_factory=lambda: os.getenv("NAVIDROME_PASSWORD", ""))
 
+    # Plex / Plexamp (used only for playlist creation + ID sync)
+    plex_url: str = field(default_factory=lambda: os.getenv("PLEX_URL", ""))
+    plex_token: str = field(default_factory=lambda: os.getenv("PLEX_TOKEN", ""))
+
     # AI Provider: "claude" or "gemini"
     ai_provider: str = field(default_factory=lambda: os.getenv("AI_PROVIDER", "claude"))
     claude_api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY", ""))

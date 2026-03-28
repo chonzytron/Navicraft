@@ -123,11 +123,20 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-fill.spotify{background:var(--green)}
 .enrich-pct{width:38px;text-align:right;flex-shrink:0}
 
-/* --- Navidrome status --- */
+/* --- Media server status --- */
+.srv-status{display:flex;align-items:center;gap:8px}
 .nd-pill{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--text-4);cursor:pointer;white-space:nowrap;overflow:hidden;max-width:120px}
 .nd-pill:hover{color:var(--text-3)}
 .nd-dot{width:7px;height:7px;border-radius:50%;background:var(--text-4);flex-shrink:0}
 .nd-dot.ok{background:var(--green)}.nd-dot.err{background:var(--red)}
+
+/* --- Server selector --- */
+.srv-wrap{display:none;align-items:center}
+.srv-wrap.on{display:flex}
+.srv-pills{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;gap:2px}
+.srv-btn{padding:4px 10px;border-radius:4px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;color:var(--text-3);background:transparent;border:none;transition:all .2s;white-space:nowrap}
+.srv-btn:hover{color:var(--text-2)}
+.srv-btn.on{background:var(--surface-3);color:var(--text);box-shadow:0 1px 4px #0006}
 
 /* --- Mode toggle (Songs / Duration) --- */
 .mode-wrap{display:flex;align-items:center;gap:8px}
@@ -182,9 +191,15 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <div class="logo-mark" onclick="triggerScan()" title="Click to rescan library">&#9835;</div>
       <h1>Navi<span>Craft</span></h1>
     </div>
-    <div class="nd-pill" id="ndBar" onclick="testNavidrome()" title="Click to retest">
-      <div class="nd-dot" id="ndDot"></div>
-      <span id="ndMsg">Navidrome</span>
+    <div class="srv-status">
+      <div class="nd-pill" id="ndBar" onclick="testServer('navidrome')" title="Click to retest">
+        <div class="nd-dot" id="ndDot"></div>
+        <span id="ndMsg">Navidrome</span>
+      </div>
+      <div class="nd-pill" id="plexBar" onclick="testServer('plex')" title="Click to retest" style="display:none">
+        <div class="nd-dot" id="plexDot"></div>
+        <span id="plexMsg">Plex</span>
+      </div>
     </div>
   </header>
 
@@ -253,6 +268,12 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
             </button>
           </div>
         </div>
+        <div class="srv-wrap" id="srvWrap">
+          <div class="srv-pills">
+            <button class="srv-btn" id="srvNavidrome" onclick="setServer('navidrome')">Navidrome</button>
+            <button class="srv-btn" id="srvPlex" onclick="setServer('plex')">Plex</button>
+          </div>
+        </div>
       </div>
       <button class="btn-gen" id="genBtn" onclick="generate()">Generate</button>
     </div>
@@ -279,7 +300,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     </div>
     <ul class="songs" id="songList"></ul>
     <div class="res-actions">
-      <button class="btn btn-primary" id="saveBtn" onclick="savePlaylist()">Save to Navidrome</button>
+      <button class="btn btn-primary" id="saveBtn" onclick="savePlaylist()">Save to Server</button>
       <button class="btn btn-ghost" onclick="exportM3U()">Export .m3u</button>
       <button class="btn btn-ghost" onclick="reset()">New playlist</button>
     </div>
@@ -296,6 +317,8 @@ let currentResult = null;
 let scanPollTimer = null;
 let activeProvider = null;
 let activeMode = 'songs';
+let activeServer = null;
+let availableServers = [];
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -330,20 +353,67 @@ async function api(path,opts={},timeoutMs=300000){
 async function init(){
   loadStats();
   loadProviders();
+  loadServers();
   pollScan();
   pollEnrichment();
-  testNavidrome();
 }
 
-// --- Navidrome status ---
-async function testNavidrome(){
-  $('#ndDot').className='nd-dot';
+// --- Media server status ---
+async function loadServers(){
   try{
-    await api('/navidrome/test',{},10000);
-    $('#ndDot').className='nd-dot ok';
-  }catch(e){
-    $('#ndDot').className='nd-dot err';
-    toast(`Navidrome unreachable: ${e.message}`,'error');
+    const s=await api('/servers');
+    availableServers=s.servers||[];
+
+    // Show/hide status pills based on configured servers
+    const hasND=availableServers.some(sv=>sv.id==='navidrome');
+    const hasPlex=availableServers.some(sv=>sv.id==='plex');
+    $('#ndBar').style.display=hasND?'':'none';
+    $('#plexBar').style.display=hasPlex?'':'none';
+
+    // Show server selector only when both are configured
+    if(hasND&&hasPlex){
+      $('#srvWrap').classList.add('on');
+    }
+
+    // Set default active server
+    if(hasND){setServer('navidrome');testServer('navidrome')}
+    else if(hasPlex){setServer('plex');testServer('plex')}
+
+    if(hasPlex)testServer('plex');
+    if(hasND&&hasPlex)testServer('navidrome'); // test both
+  }catch{}
+}
+
+function setServer(id){
+  activeServer=id;
+  $('#srvNavidrome').classList.toggle('on',id==='navidrome');
+  $('#srvPlex').classList.toggle('on',id==='plex');
+  // Update save button label
+  const label=id==='plex'?'Save to Plex':'Save to Navidrome';
+  $('#saveBtn').textContent=label;
+}
+
+function serverLabel(){return activeServer==='plex'?'Plex':'Navidrome'}
+
+async function testServer(id){
+  if(id==='plex'){
+    $('#plexDot').className='nd-dot';
+    try{
+      await api('/plex/test',{},10000);
+      $('#plexDot').className='nd-dot ok';
+    }catch(e){
+      $('#plexDot').className='nd-dot err';
+      toast(`Plex unreachable: ${e.message}`,'error');
+    }
+  }else{
+    $('#ndDot').className='nd-dot';
+    try{
+      await api('/navidrome/test',{},10000);
+      $('#ndDot').className='nd-dot ok';
+    }catch(e){
+      $('#ndDot').className='nd-dot err';
+      toast(`Navidrome unreachable: ${e.message}`,'error');
+    }
   }
 }
 
@@ -430,14 +500,17 @@ function pollScan(){
 }
 
 // --- Generate (SSE streaming) ---
-const PHASE_LABELS={
-  pass1:'Pass 1: Analyzing your prompt...',
-  filtering:'Searching your library...',
-  broadening:'Broadening search...',
-  pass2:'Pass 2: AI is selecting songs...',
-  matching:'Building playlist...',
-  saving:'Saving to Navidrome...',
-};
+function phaseLabel(phase){
+  const labels={
+    pass1:'Pass 1: Analyzing your prompt...',
+    filtering:'Searching your library...',
+    broadening:'Broadening search...',
+    pass2:'Pass 2: AI is selecting songs...',
+    matching:'Building playlist...',
+    saving:`Saving to ${serverLabel()}...`,
+  };
+  return labels[phase]||null;
+}
 
 async function generate(){
   const prompt=$('#prompt').value.trim();
@@ -456,6 +529,7 @@ async function generate(){
   const body={prompt,max_songs:maxSongs,auto_create:autoCreate};
   if(targetMin)body.target_duration_min=targetMin;
   if(activeProvider)body.provider=activeProvider;
+  if(activeServer)body.server=activeServer;
 
   let startTime=Date.now();
   let elapsed;
@@ -496,7 +570,7 @@ async function generate(){
         }else if(line.startsWith('data: ')&&eventType){
           const data=JSON.parse(line.slice(6));
           if(eventType==='progress'){
-            const label=PHASE_LABELS[data.phase]||data.message||'Working...';
+            const label=phaseLabel(data.phase)||data.message||'Working...';
             $('#loadMsg').textContent=label;
           }else if(eventType==='result'){
             currentResult=data;
@@ -558,11 +632,13 @@ function renderResults(r){
 // --- Save ---
 async function savePlaylist(){
   if(!currentResult||!currentResult.songs.length)return;
-  const ndIds=currentResult.songs.map(s=>s.navidrome_id).filter(Boolean);
-  if(!ndIds.length){toast('No Navidrome IDs — verify NAVIDROME_URL is reachable and trigger a scan','error');return}
+  const idField=activeServer==='plex'?'plex_id':'navidrome_id';
+  const ids=currentResult.songs.map(s=>s[idField]).filter(Boolean);
+  const label=serverLabel();
+  if(!ids.length){toast(`No ${label} IDs — verify server connection and trigger a scan`,'error');return}
   try{
-    await api('/playlists',{method:'POST',body:JSON.stringify({name:currentResult.name,song_ids:ndIds})});
-    toast('Playlist saved to Navidrome!','success');
+    await api('/playlists',{method:'POST',body:JSON.stringify({name:currentResult.name,song_ids:ids,server:activeServer})});
+    toast(`Playlist saved to ${label}!`,'success');
     $('#savedPill').style.display='';$('#saveBtn').style.display='none';
   }catch(e){toast(`Save failed: ${e.message}`,'error')}
 }

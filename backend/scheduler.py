@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from config import config
 import scanner
 import navidrome
+import plex
 import popularity
 import database as db
 
@@ -24,9 +25,12 @@ async def _scheduled_scan():
         stats = await scanner.scan_library(full_scan=False)
         logger.info("Scheduled scan complete: %s", stats)
 
-        # Sync Navidrome IDs if any changes
+        # Sync media server IDs if any changes
         if stats.get("added", 0) > 0 or stats.get("updated", 0) > 0:
-            await navidrome.sync_navidrome_ids()
+            if config.navidrome_url and config.navidrome_password:
+                await navidrome.sync_navidrome_ids()
+            if config.plex_url and config.plex_token:
+                await plex.sync_plex_ids()
     except Exception:
         logger.exception("Scheduled scan failed")
 

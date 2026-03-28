@@ -1,5 +1,5 @@
 """
-NaviCraft — AI-powered playlist generator for Navidrome.
+NaviCraft — AI-powered playlist generator for Navidrome and Plex/Plexamp.
 Main FastAPI application.
 """
 
@@ -18,6 +18,7 @@ from config import config
 import database as db
 import scanner
 import navidrome
+import plex
 import ai_engine
 import scheduler as sched
 import popularity
@@ -35,6 +36,15 @@ _scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": ""}
 # Rate limiting for /api/generate
 _last_generate_time = 0.0
 _GENERATE_COOLDOWN = 10  # seconds
+
+
+def _default_server() -> str:
+    """Return the first configured media server ID."""
+    if config.navidrome_url and config.navidrome_password:
+        return "navidrome"
+    if config.plex_url and config.plex_token:
+        return "plex"
+    return "navidrome"  # fallback
 
 
 @asynccontextmanager
@@ -67,11 +77,17 @@ async def _initial_scan():
 
             await scanner.scan_library(full_scan=False, progress_cb=progress)
 
-        # Sync Navidrome IDs
-        try:
-            await navidrome.sync_navidrome_ids()
-        except Exception:
-            logger.warning("Navidrome ID sync failed (Navidrome may not be available yet)")
+        # Sync media server IDs
+        if config.navidrome_url and config.navidrome_password:
+            try:
+                await navidrome.sync_navidrome_ids()
+            except Exception:
+                logger.warning("Navidrome ID sync failed (Navidrome may not be available yet)")
+        if config.plex_url and config.plex_token:
+            try:
+                await plex.sync_plex_ids()
+            except Exception:
+                logger.warning("Plex ID sync failed (Plex may not be available yet)")
 
         _scan_progress.update(phase="idle", message="Ready")
 
@@ -98,11 +114,13 @@ class GenerateRequest(BaseModel):
     target_duration_min: Optional[int] = Field(default=None, ge=5, le=600, description="Target duration in minutes")
     auto_create: bool = Field(default=False)
     provider: Optional[str] = Field(default=None, description="AI provider override: 'claude' or 'gemini'")
+    server: Optional[str] = Field(default=None, description="Target server for auto-create: 'navidrome' or 'plex'")
 
 
 class CreatePlaylistRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    song_ids: list[str] = Field(..., min_length=1, description="Navidrome song IDs")
+    song_ids: list[str] = Field(..., min_length=1, description="Media server song IDs")
+    server: Optional[str] = Field(default=None, description="Target server: 'navidrome' or 'plex'")
 
 
 # =========================================================================
@@ -131,6 +149,25 @@ async def test_navidrome():
         return await navidrome.test_connection()
     except Exception as e:
         raise HTTPException(502, detail=f"Cannot connect to Navidrome: {e}")
+
+
+@app.get("/api/plex/test")
+async def test_plex():
+    try:
+        return await plex.test_connection()
+    except Exception as e:
+        raise HTTPException(502, detail=f"Cannot connect to Plex: {e}")
+
+
+@app.get("/api/servers")
+async def list_servers():
+    """Return which media servers are configured."""
+    servers = []
+    if config.navidrome_url and config.navidrome_password:
+        servers.append({"id": "navidrome", "name": "Navidrome"})
+    if config.plex_url and config.plex_token:
+        servers.append({"id": "plex", "name": "Plex"})
+    return {"servers": servers}
 
 
 # =========================================================================
@@ -251,12 +288,19 @@ async def trigger_scan(full: bool = False):
 
             stats = await scanner.scan_library(full_scan=full, progress_cb=progress)
 
-            # Sync Navidrome IDs after scan
-            try:
-                _scan_progress.update(phase="syncing", message="Syncing Navidrome IDs...")
-                await navidrome.sync_navidrome_ids()
-            except Exception:
-                logger.warning("Navidrome ID sync failed after scan")
+            # Sync media server IDs after scan
+            if config.navidrome_url and config.navidrome_password:
+                try:
+                    _scan_progress.update(phase="syncing", message="Syncing Navidrome IDs...")
+                    await navidrome.sync_navidrome_ids()
+                except Exception:
+                    logger.warning("Navidrome ID sync failed after scan")
+            if config.plex_url and config.plex_token:
+                try:
+                    _scan_progress.update(phase="syncing", message="Syncing Plex IDs...")
+                    await plex.sync_plex_ids()
+                except Exception:
+                    logger.warning("Plex ID sync failed after scan")
 
             # Enrich new tracks with popularity data
             try:
@@ -373,25 +417,31 @@ async def generate_playlist(req: GenerateRequest):
                 "filters_used": filters,
                 "candidates_found": len(candidates),
                 "created": False,
-                "navidrome_id": None,
+                "server_playlist_id": None,
+                "server": None,
             }
 
             # --- Auto-create ---
-            navidrome_pl_id = None
             if req.auto_create and matched_songs:
-                nd_ids = [t["navidrome_id"] for t in matched_songs if t.get("navidrome_id")]
-                if nd_ids:
+                target = req.server or _default_server()
+                id_field = "plex_id" if target == "plex" else "navidrome_id"
+                server_ids = [t[id_field] for t in matched_songs if t.get(id_field)]
+                server_label = "Plex" if target == "plex" else "Navidrome"
+                if server_ids:
                     try:
-                        yield sse("progress", {"phase": "saving", "message": "Saving to Navidrome..."})
-                        pl = await navidrome.create_playlist(result["name"], nd_ids)
+                        yield sse("progress", {"phase": "saving", "message": f"Saving to {server_label}..."})
+                        if target == "plex":
+                            pl = await plex.create_playlist(result["name"], server_ids)
+                        else:
+                            pl = await navidrome.create_playlist(result["name"], server_ids)
                         result["created"] = True
-                        result["navidrome_id"] = pl["id"]
-                        navidrome_pl_id = pl["id"]
+                        result["server_playlist_id"] = pl["id"]
+                        result["server"] = target
                     except Exception as e:
-                        logger.warning("Auto-create failed: %s", e)
+                        logger.warning("Auto-create to %s failed: %s", server_label, e)
                         result["auto_create_error"] = str(e)
                 else:
-                    result["auto_create_error"] = "No Navidrome IDs matched. Run a Navidrome sync."
+                    result["auto_create_error"] = f"No {server_label} IDs matched. Run a library scan to sync."
 
             yield sse("result", result)
 
@@ -416,27 +466,39 @@ async def generate_playlist(req: GenerateRequest):
 # =========================================================================
 
 @app.post("/api/playlists")
-async def create_playlist(req: CreatePlaylistRequest):
+async def create_playlist_route(req: CreatePlaylistRequest):
+    target = req.server or _default_server()
     try:
-        pl = await navidrome.create_playlist(req.name, req.song_ids)
+        if target == "plex":
+            pl = await plex.create_playlist(req.name, req.song_ids)
+        else:
+            pl = await navidrome.create_playlist(req.name, req.song_ids)
         return pl
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
 
 @app.get("/api/playlists")
-async def list_playlists():
+async def list_playlists(server: Optional[str] = None):
+    target = server or _default_server()
     try:
-        return await navidrome.get_playlists()
+        if target == "plex":
+            return await plex.get_playlists()
+        else:
+            return await navidrome.get_playlists()
     except Exception as e:
         raise HTTPException(502, detail=str(e))
 
 
 @app.delete("/api/playlists/{playlist_id}")
-async def delete_playlist(playlist_id: str):
-    """Delete a playlist from Navidrome."""
+async def delete_playlist(playlist_id: str, server: Optional[str] = None):
+    """Delete a playlist from the target media server."""
+    target = server or _default_server()
     try:
-        await navidrome.delete_playlist(playlist_id)
+        if target == "plex":
+            await plex.delete_playlist(playlist_id)
+        else:
+            await navidrome.delete_playlist(playlist_id)
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(500, detail=str(e))

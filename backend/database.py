@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     label           TEXT,
     mood            TEXT,
     navidrome_id    TEXT,
+    plex_id         TEXT,
     popularity      INTEGER,
     mb_rating       REAL,
     mb_rating_count INTEGER DEFAULT 0,
@@ -55,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_year ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_mood ON tracks(mood);
 CREATE INDEX IF NOT EXISTS idx_navidrome_id ON tracks(navidrome_id);
+CREATE INDEX IF NOT EXISTS idx_plex_id ON tracks(plex_id);
 
 CREATE TABLE IF NOT EXISTS scan_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +90,7 @@ def _migrate(conn: sqlite3.Connection):
     """Add columns that may not exist in older databases."""
     columns = {r[1] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()}
     migrations = [
+        ("plex_id", "TEXT"),
         ("popularity", "INTEGER"),
         ("mb_rating", "REAL"),
         ("mb_rating_count", "INTEGER DEFAULT 0"),
@@ -175,6 +178,19 @@ def bulk_update_navidrome_ids(db: sqlite3.Connection, mapping: dict):
     db.executemany(
         "UPDATE tracks SET navidrome_id = ? WHERE file_path = ?",
         [(nid, fp) for fp, nid in mapping.items()]
+    )
+
+
+def update_plex_id(db: sqlite3.Connection, file_path: str, plex_id: str):
+    """Set the Plex rating key for a track."""
+    db.execute("UPDATE tracks SET plex_id = ? WHERE file_path = ?", (plex_id, file_path))
+
+
+def bulk_update_plex_ids(db: sqlite3.Connection, mapping: dict):
+    """Bulk update Plex IDs. mapping = {file_path: plex_id}"""
+    db.executemany(
+        "UPDATE tracks SET plex_id = ? WHERE file_path = ?",
+        [(pid, fp) for fp, pid in mapping.items()]
     )
 
 
@@ -311,7 +327,7 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
 
     rows = db.execute(f"""
         SELECT id, title, artist, album_artist, album, genre, year,
-               duration, bpm, composer, mood, navidrome_id, file_path,
+               duration, bpm, composer, mood, navidrome_id, plex_id, file_path,
                popularity
         FROM tracks
         WHERE {where}
@@ -351,7 +367,7 @@ def search_tracks(db: sqlite3.Connection, query: str, limit: int = 50) -> list[d
     """Simple text search across title, artist, album."""
     q = f"%{query}%"
     rows = db.execute("""
-        SELECT id, title, artist, album, genre, year, duration, navidrome_id
+        SELECT id, title, artist, album, genre, year, duration, navidrome_id, plex_id
         FROM tracks
         WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?
         LIMIT ?

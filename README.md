@@ -1,6 +1,6 @@
 # NaviCraft
 
-AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Describe the vibe you want, get a playlist built from your own music library.
+AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [Plex/Plexamp](https://www.plex.tv/). Describe the vibe you want, get a playlist built from your own music library.
 
 ## How It Works
 
@@ -22,6 +22,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Descr
 
 4. CREATE PLAYLIST
    Match songs to Navidrome IDs → Subsonic createPlaylist
+   Or match to Plex ratingKeys → Plex HTTP API createPlaylist
    Or export as .m3u file for any music player
 ```
 
@@ -36,8 +37,9 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/). Descr
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
 - **Multiple AI providers** — Claude (Anthropic) or Gemini (Google); switch per-request in the UI when both keys are configured
 - **Rich metadata** — Scans BPM, mood, composer, label directly from audio files (richer than the Subsonic API)
-- **Export options** — Save directly to Navidrome or download as .m3u
-- **Navidrome status** — Live connection indicator in the header; click to retest
+- **Multiple media servers** — Save playlists to Navidrome, Plex/Plexamp, or both. Toggle between servers in the UI when both are configured.
+- **Export options** — Save to your media server or download as .m3u
+- **Server status** — Live connection indicators in the header for each configured server; click to retest
 
 ## Quick Start (Docker)
 
@@ -80,9 +82,11 @@ The script always pulls the latest image, prunes old layers, and restarts the co
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MUSIC_DIR` | `/music` | Music directory inside the container |
-| `NAVIDROME_URL` | `http://localhost:4533` | Navidrome server URL |
+| `NAVIDROME_URL` | `http://localhost:4533` | Navidrome server URL (leave empty if using Plex only) |
 | `NAVIDROME_USER` | `admin` | Navidrome username |
 | `NAVIDROME_PASSWORD` | — | Navidrome password |
+| `PLEX_URL` | — | Plex server URL (e.g. `http://localhost:32400`). Leave empty if using Navidrome only. |
+| `PLEX_TOKEN` | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
 | `AI_PROVIDER` | `claude` | Default AI provider: `claude` or `gemini` |
 | `CLAUDE_API_KEY` | — | Anthropic API key (requires separate API billing) |
 | `CLAUDE_MODEL` | `claude-3-5-sonnet-20241022` | Claude model identifier |
@@ -142,11 +146,15 @@ navicraft/
 │   ├── scanner.py       # mutagen-based file scanner
 │   ├── ai_engine.py     # Two-pass AI (Claude / Gemini)
 │   ├── navidrome.py     # Subsonic API client
+│   ├── plex.py          # Plex HTTP API client
 │   ├── popularity.py    # Spotify + Last.fm + MusicBrainz enrichment
 │   ├── scheduler.py     # Background scan + enrichment jobs
 │   └── requirements.txt
 ├── frontend/
-│   └── index.html       # Single-file SPA (no build step)
+│   ├── index.html       # SPA markup (no build step)
+│   └── assets/
+│       ├── app.js       # Frontend logic
+│       └── styles.css   # Styles
 ├── unraid/
 │   ├── deploy-navicraft.sh  # Unraid User Script
 │   ├── my-navicraft.xml     # Unraid Docker template
@@ -162,16 +170,18 @@ navicraft/
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/ai/providers` | List configured AI providers |
+| GET | `/api/servers` | List configured media servers |
 | GET | `/api/navidrome/test` | Test Navidrome connection |
+| GET | `/api/plex/test` | Test Plex connection |
 | GET | `/api/library/stats` | Library stats (counts, duration, genres) |
 | GET | `/api/library/genres` | All genres with counts |
 | GET | `/api/library/search?q=` | Search tracks by text |
 | POST | `/api/scan?full=false` | Trigger library scan (incremental or full) |
 | GET | `/api/scan/status` | Current scan progress |
 | POST | `/api/generate` | Generate playlist — SSE stream, 10s rate limit |
-| POST | `/api/playlists` | Save playlist to Navidrome |
-| GET | `/api/playlists` | List Navidrome playlists |
-| DELETE | `/api/playlists/:id` | Delete from Navidrome |
+| POST | `/api/playlists` | Save playlist to Navidrome or Plex |
+| GET | `/api/playlists` | List playlists from active server |
+| DELETE | `/api/playlists/:id` | Delete playlist from active server |
 | POST | `/api/popularity/enrich` | Manually trigger an enrichment batch |
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
 | GET | `/api/popularity/status` | Enrichment progress (enriched/total/%) |
@@ -185,7 +195,8 @@ navicraft/
   "max_songs": 30,
   "target_duration_min": 90,
   "auto_create": false,
-  "provider": "gemini"
+  "provider": "gemini",
+  "server": "navidrome"
 }
 ```
 
@@ -198,7 +209,7 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
 - **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
 - **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).
-- **Navidrome ID sync:** NaviCraft matches songs to Navidrome by file path. If paths differ (e.g. symlinks), it falls back to artist + title matching.
+- **Media server ID sync:** NaviCraft matches songs to Navidrome/Plex by file path. If paths differ (e.g. symlinks), it falls back to artist + title matching. When both servers are configured, IDs are synced independently for each.
 - **Manual rescan:** Click the ♪ logo mark in the top-left to trigger an incremental rescan at any time.
 
 ## License

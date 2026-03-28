@@ -29,12 +29,17 @@ MUSIC_PATH="/mnt/user/media/music"
 # Path for NaviCraft persistent data (SQLite DB)
 APPDATA_PATH="/mnt/user/appdata/navicraft"
 
-# Navidrome connection
+# Navidrome connection (optional if using Plex)
 # If Navidrome runs in bridge mode, use your Unraid IP (e.g., http://192.168.1.100:4533)
 # If using a custom Docker network, you can use the container name (e.g., http://navidrome:4533)
 NAVIDROME_URL="http://192.168.1.100:4533"
 NAVIDROME_USER="admin"
 NAVIDROME_PASSWORD="your_password_here"
+
+# Plex / Plexamp connection (optional if using Navidrome)
+# Get your token: https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/
+PLEX_URL=""
+PLEX_TOKEN=""
 
 # AI Provider: "claude" or "gemini"
 AI_PROVIDER="claude"
@@ -123,6 +128,8 @@ docker run -d \
     -e "NAVIDROME_URL=$NAVIDROME_URL" \
     -e "NAVIDROME_USER=$NAVIDROME_USER" \
     -e "NAVIDROME_PASSWORD=$NAVIDROME_PASSWORD" \
+    -e "PLEX_URL=$PLEX_URL" \
+    -e "PLEX_TOKEN=$PLEX_TOKEN" \
     -e "AI_PROVIDER=$AI_PROVIDER" \
     -e "CLAUDE_API_KEY=$CLAUDE_API_KEY" \
     -e "CLAUDE_MODEL=$CLAUDE_MODEL" \

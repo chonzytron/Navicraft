@@ -20,7 +20,10 @@ backend/
 └── requirements.txt
 
 frontend/
-└── index.html       # Single-file SPA (vanilla HTML/CSS/JS, no build step)
+├── index.html       # SPA markup (vanilla HTML, no build step)
+└── assets/
+    ├── app.js       # Frontend logic (vanilla JS)
+    └── styles.css   # Styles
 
 unraid/
 ├── deploy-navicraft.sh  # Unraid User Script for automated deployment
@@ -91,7 +94,7 @@ docker compose up -d --build
 - **Add metadata fields**: Update `SCHEMA` in `database.py`, update `_extract_metadata()` in `scanner.py`, update `filter_tracks()` if the field should be filterable
 - **Add API endpoints**: Add route in `main.py`, Pydantic models at the top of the file
 - **Add new popularity source**: Add lookup function in `popularity.py`, integrate into `_blend_scores()`, add DB columns in `database.py` with migration support
-- **Frontend changes**: Edit `frontend/index.html` directly — single file, no build step
+- **Frontend changes**: Edit `frontend/index.html` (markup), `frontend/assets/app.js` (logic), or `frontend/assets/styles.css` — no build step
 - **Schema changes**: Add columns to `SCHEMA` dict in `database.py`; `_migrate()` handles adding new columns automatically on startup
 
 ## API Endpoints
@@ -143,7 +146,7 @@ docker compose up -d --build
 
 ## Frontend Features
 
-- **Single-file SPA** — `frontend/index.html`, vanilla JS, no build step
+- **SPA** — `frontend/index.html` (markup) + `assets/app.js` (logic) + `assets/styles.css`, vanilla JS, no build step
 - **Media server status indicators** — green/red dots in header for each configured server (Navidrome and/or Plex); click to retest
 - **Server selector** — pill toggle (Navidrome / Plex) shown when both servers are configured; controls where playlists are saved
 - **Rescan trigger** — click the ♪ logo mark to trigger an incremental library scan

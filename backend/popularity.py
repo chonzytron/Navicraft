@@ -44,7 +44,8 @@ LASTFM_DELAY = 0.25  # 5 req/sec allowed
 # --- Spotify ---
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
-SPOTIFY_DELAY = 0.5  # ~2 req/s — well within Spotify's ~250 req/30s Client Credentials limit
+SPOTIFY_DELAY = 0.3  # ~3 req/s — within Spotify's Client Credentials limit
+SPOTIFY_SLOWDOWN_DELAY = 1.0  # slower rate after recovering from a 429
 
 # Spotify token cache
 _spotify_token: str | None = None
@@ -53,8 +54,8 @@ _spotify_token_expires: float = 0
 # Spotify rate-limit cooldown — set when a batch gets rate-limited,
 # skip Spotify entirely until this timestamp passes.
 # Honours Retry-After header if Spotify sends one.
-SPOTIFY_COOLDOWN_SECONDS = 600  # fallback cooldown if no Retry-After header
-SPOTIFY_MAX_COOLDOWN = 3600  # never wait longer than 1 hour, even if Retry-After says more
+SPOTIFY_COOLDOWN_SECONDS = 120  # fallback cooldown if no Retry-After header
+SPOTIFY_MAX_COOLDOWN = 600  # never wait longer than 10 minutes, even if Retry-After says more
 _spotify_blocked_until: float = 0
 
 
@@ -550,8 +551,7 @@ async def enrich_popularity(batch_size: int = 500):
                 sources.append("MusicBrainz (fallback)")
                 logger.info("Popularity: enriching %d tracks via %s", len(tracks), " + ".join(sources))
 
-            spotify_consecutive_429s = 0
-            SPOTIFY_429_LIMIT = 3  # disable Spotify after 3 consecutive 429s
+            spotify_delay = SPOTIFY_DELAY  # adaptive: slows after 429 recovery
 
             if tracks:
                 for track in tracks:
@@ -569,25 +569,39 @@ async def enrich_popularity(batch_size: int = 500):
                         spotify_checked_at = None
                         if spotify_token:
                             raw = await _lookup_spotify(client, artist, title, spotify_token)
-                            await asyncio.sleep(SPOTIFY_DELAY)
                             if raw and raw.get("rate_limited"):
-                                spotify_consecutive_429s += 1
-                                if spotify_consecutive_429s >= SPOTIFY_429_LIMIT:
-                                    retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
+                                # Wait out the rate limit and retry this same track
+                                retry_wait = min(raw.get("retry_after") or 5, 30)
+                                logger.info(
+                                    "Popularity: Spotify 429 — waiting %ds before retry (Retry-After: %s)",
+                                    retry_wait, raw.get("retry_after"),
+                                )
+                                await asyncio.sleep(retry_wait)
+                                raw = await _lookup_spotify(client, artist, title, spotify_token)
+                                if raw and raw.get("rate_limited"):
+                                    # Still rate-limited after waiting — short cooldown
+                                    cooldown = min(raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS, SPOTIFY_MAX_COOLDOWN)
                                     logger.warning(
-                                        "Popularity: Spotify rate-limited — "
-                                        "disabling for %ds (Retry-After: %s)",
-                                        retry_after,
-                                        raw.get("retry_after"),
+                                        "Popularity: Spotify still rate-limited after retry — cooldown %ds", cooldown
                                     )
-                                    _set_spotify_cooldown(retry_after)
-                                    spotify_token = None  # skip Spotify for rest of batch
+                                    _set_spotify_cooldown(cooldown)
+                                    spotify_token = None
+                                else:
+                                    # Recovered — slow down for the rest of the batch
+                                    spotify_delay = SPOTIFY_SLOWDOWN_DELAY
+                                    logger.info("Popularity: Spotify recovered after 429 — slowing to %.1fs delay", spotify_delay)
+                                    if raw and raw.get("not_found"):
+                                        spotify_checked_at = now
+                                    elif raw:
+                                        spotify_result = raw
+                                        spotify_checked_at = now
                             elif raw and raw.get("not_found"):
                                 spotify_checked_at = now  # confirmed not on Spotify, retry tomorrow
                             elif raw:
-                                spotify_consecutive_429s = 0
                                 spotify_result = raw
                                 spotify_checked_at = now
+                            if spotify_token:
+                                await asyncio.sleep(spotify_delay)
 
                         # Last.fm
                         lastfm_result = None
@@ -670,27 +684,33 @@ async def enrich_popularity(batch_size: int = 500):
 
                     # Pass 1: batch lookups for tracks with known Spotify IDs (50 per request)
                     BATCH_SIZE = 50
+                    topup_delay = SPOTIFY_DELAY
                     for i in range(0, len(have_id), BATCH_SIZE):
                         if _spotify_blocked_until and time.time() < _spotify_blocked_until:
                             break
                         chunk = have_id[i:i + BATCH_SIZE]
                         ids = [t["spotify_id"] for t in chunk]
                         batch_result = await _batch_lookup_spotify(client, ids, spotify_token)
-                        await asyncio.sleep(SPOTIFY_DELAY)
 
                         if isinstance(batch_result, dict) and batch_result.get("rate_limited"):
-                            retry_after = batch_result.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
-                            logger.warning(
-                                "Popularity: Spotify batch rate-limited — disabling for %ds", retry_after
-                            )
-                            _set_spotify_cooldown(retry_after)
-                            spotify_token = None
-                            break
+                            retry_wait = min(batch_result.get("retry_after") or 5, 30)
+                            logger.info("Popularity: Spotify batch 429 — waiting %ds before retry", retry_wait)
+                            await asyncio.sleep(retry_wait)
+                            batch_result = await _batch_lookup_spotify(client, ids, spotify_token)
+                            if isinstance(batch_result, dict) and batch_result.get("rate_limited"):
+                                cooldown = min(batch_result.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS, SPOTIFY_MAX_COOLDOWN)
+                                logger.warning("Popularity: Spotify batch still rate-limited — cooldown %ds", cooldown)
+                                _set_spotify_cooldown(cooldown)
+                                spotify_token = None
+                                break
+                            topup_delay = SPOTIFY_SLOWDOWN_DELAY
+                            logger.info("Popularity: Spotify batch recovered — slowing to %.1fs delay", topup_delay)
+
+                        await asyncio.sleep(topup_delay)
 
                         if not batch_result:
                             continue
 
-                        id_to_track = {t["spotify_id"]: t for t in chunk}
                         for track in chunk:
                             raw = batch_result.get(track["spotify_id"])
                             if raw:
@@ -705,6 +725,7 @@ async def enrich_popularity(batch_size: int = 500):
                             topup_pending.clear()
 
                     # Pass 2: individual searches for tracks without a Spotify ID
+                    search_delay = topup_delay  # inherit slowdown from batch pass
                     for track in need_search:
                         if not spotify_token or (_spotify_blocked_until and time.time() < _spotify_blocked_until):
                             break
@@ -715,16 +736,22 @@ async def enrich_popularity(batch_size: int = 500):
                             continue
 
                         raw = await _lookup_spotify(client, artist, title, spotify_token)
-                        await asyncio.sleep(SPOTIFY_DELAY)
 
                         if raw and raw.get("rate_limited"):
-                            retry_after = raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS
-                            logger.warning(
-                                "Popularity: Spotify rate-limited during search top-up — disabling for %ds", retry_after
-                            )
-                            _set_spotify_cooldown(retry_after)
-                            spotify_token = None
-                            break
+                            retry_wait = min(raw.get("retry_after") or 5, 30)
+                            logger.info("Popularity: Spotify search top-up 429 — waiting %ds before retry", retry_wait)
+                            await asyncio.sleep(retry_wait)
+                            raw = await _lookup_spotify(client, artist, title, spotify_token)
+                            if raw and raw.get("rate_limited"):
+                                cooldown = min(raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS, SPOTIFY_MAX_COOLDOWN)
+                                logger.warning("Popularity: Spotify still rate-limited during search top-up — cooldown %ds", cooldown)
+                                _set_spotify_cooldown(cooldown)
+                                spotify_token = None
+                                break
+                            search_delay = SPOTIFY_SLOWDOWN_DELAY
+                            logger.info("Popularity: Spotify search top-up recovered — slowing to %.1fs delay", search_delay)
+
+                        await asyncio.sleep(search_delay)
 
                         if raw is None:
                             continue  # network/API error — retry next batch, don't mark
@@ -733,7 +760,6 @@ async def enrich_popularity(batch_size: int = 500):
                             not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
                             continue
 
-                        spotify_consecutive_429s = 0
                         topup_pending.append(_topup_row(track, raw))
                         spotify_topup += 1
 

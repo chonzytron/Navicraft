@@ -17,7 +17,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 
 3. GENERATE (two-pass AI)
    Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, exclusions)
-   SQLite query narrows to ~500 candidates, biased by popularity, capped per artist (max 15)
+   SQLite query narrows to ~500 candidates, biased by popularity, with proportional per-artist diversity cap
    Pass 2: prompt + candidate list → AI picks & orders the final playlist
 
 4. CREATE PLAYLIST
@@ -33,7 +33,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
 - **Popularity-aware** — Uses Spotify streaming data, Last.fm listener counts, and MusicBrainz ratings so playlists favour well-known tracks over deep cuts
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
-- **Artist diversity** — Candidates are capped at 15 tracks per artist so one artist never dominates
+- **Artist diversity** — Candidates are capped at 30% of requested song count per artist (min 3) so one artist never dominates; cap is skipped when specific artists are requested
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
 - **Multiple AI providers** — Claude (Anthropic) or Gemini (Google); switch per-request in the UI when both keys are configured
 - **Rich metadata** — Scans BPM, mood, composer, label directly from audio files (richer than the Subsonic API)

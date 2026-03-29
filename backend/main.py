@@ -365,17 +365,17 @@ async def generate_playlist(req: GenerateRequest):
 
             # --- Filter candidates ---
             with db.get_db() as conn:
-                candidates = db.filter_tracks(conn, filters, limit=config.max_candidates)
+                candidates = db.filter_tracks(conn, filters, limit=config.max_candidates, max_songs=req.max_songs)
 
             if len(candidates) < 30:
                 yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, broadening search..."})
                 broad_filters = {"genres": filters.get("genres", [])}
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates)
+                    candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates, max_songs=req.max_songs)
 
             if len(candidates) < 20:
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, {}, limit=config.max_candidates)
+                    candidates = db.filter_tracks(conn, {}, limit=config.max_candidates, max_songs=req.max_songs)
 
             logger.info("Sending %d candidates to Pass 2", len(candidates))
 
@@ -395,11 +395,12 @@ async def generate_playlist(req: GenerateRequest):
             # --- Match selections ---
             candidate_map = {c["id"]: c for c in candidates}
             matched_songs = []
-            for s in ai_result.get("songs", []):
-                # AI may return IDs as strings; normalise to int
+            # Support both compact song_ids format and legacy songs format
+            song_ids = ai_result.get("song_ids") or [s.get("id") for s in ai_result.get("songs", [])]
+            for raw_id in song_ids:
                 try:
-                    sid = int(s["id"])
-                except (KeyError, TypeError, ValueError):
+                    sid = int(raw_id)
+                except (TypeError, ValueError):
                     continue
                 track = candidate_map.get(sid)
                 if track:
@@ -412,7 +413,7 @@ async def generate_playlist(req: GenerateRequest):
                 "description": ai_result.get("description", ""),
                 "songs": matched_songs,
                 "total_matched": len(matched_songs),
-                "total_suggested": len(ai_result.get("songs", [])),
+                "total_suggested": len(ai_result.get("song_ids") or ai_result.get("songs", [])),
                 "total_duration": round(total_duration),
                 "filters_used": filters,
                 "candidates_found": len(candidates),

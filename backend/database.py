@@ -266,12 +266,13 @@ def get_year_range(db: sqlite3.Connection) -> dict:
 
 
 def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
-                   max_per_artist: int = 15) -> list[dict]:
+                   max_songs: int | None = None) -> list[dict]:
     """
     Query tracks matching AI-generated filters.
     filters can include: genres, year_min, year_max, artists, moods, bpm_min, bpm_max,
                          exclude_genres, exclude_artists, exclude_keywords
-    max_per_artist caps how many tracks any single artist can contribute (diversity).
+    Per-artist diversity cap is applied as 30% of max_songs (min 3) when no
+    specific artists are requested. Skipped entirely when artists are specified.
     """
     conditions = ["title IS NOT NULL"]
     params = []
@@ -342,16 +343,23 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         LIMIT ?
     """, params).fetchall()
 
-    # Apply per-artist diversity cap
+    # Apply per-artist diversity cap (skipped when specific artists are requested)
+    has_artist_filter = bool(filters.get("artists"))
+    if has_artist_filter or max_songs is None:
+        max_per_artist = None  # No cap
+    else:
+        max_per_artist = max(3, round(max_songs * 0.3))
+
     results = []
     artist_counts: dict[str, int] = {}
     for r in rows:
         d = dict(r)
-        artist_key = (d.get("artist") or "").lower().strip()
-        count = artist_counts.get(artist_key, 0)
-        if count >= max_per_artist:
-            continue
-        artist_counts[artist_key] = count + 1
+        if max_per_artist is not None:
+            artist_key = (d.get("artist") or "").lower().strip()
+            count = artist_counts.get(artist_key, 0)
+            if count >= max_per_artist:
+                continue
+            artist_counts[artist_key] = count + 1
         results.append(d)
         if len(results) >= limit:
             break

@@ -37,8 +37,7 @@ Respond ONLY with a JSON object (no markdown, no backticks):
   "keywords": ["keyword1", "keyword2"],
   "exclude_genres": [],
   "exclude_artists": [],
-  "exclude_keywords": [],
-  "reasoning": "Brief explanation of your filter choices"
+  "exclude_keywords": []
 }
 
 Rules:
@@ -56,24 +55,23 @@ Rules:
 
 PASS2_SYSTEM = """You are a music curator. Given a user's playlist prompt and a list of candidate songs from their library, select and order the final playlist.
 
+Candidates are provided in compact format: id;title;artist;album;genre;year;duration;bpm;mood;popularity
+
 Respond ONLY with a JSON object (no markdown, no backticks):
 {
   "name": "Playlist Name",
   "description": "Brief 1-2 sentence description of the playlist vibe",
-  "songs": [
-    {"id": 123, "title": "Song Title", "artist": "Artist Name"},
-    {"id": 456, "title": "Song Title", "artist": "Artist Name"}
-  ]
+  "song_ids": [123, 456, 789]
 }
 
 Rules:
-- ONLY select songs from the provided candidate list, using their exact "id" values
+- ONLY select songs from the provided candidate list, using their exact id values
+- song_ids is a JSON array of integer IDs in playlist order — no objects, just the IDs
 - Order songs for good flow — consider energy arc, key, tempo, and transitions
 - Mix artists — don't cluster songs by the same artist unless the prompt asks for it
-- If the user specified a number of songs or total duration, honor it
-- The "id" field is critical — it must match the candidate's id exactly
+- You MUST return EXACTLY the number of songs requested. If the user asks for 30 songs, return exactly 30 — not 20, not 25, but exactly 30. Only return fewer if there aren't enough candidates.
 - If few candidates match, include what fits and explain in the description
-- STRONGLY prefer songs with higher popularity scores (shown as "pop:XX" where XX is 0-100). These are well-known, beloved tracks that listeners are more likely to enjoy. Avoid obscure deep cuts unless the prompt specifically asks for hidden gems or rare tracks.
+- STRONGLY prefer songs with higher popularity scores (pop column, 0-100). These are well-known, beloved tracks that listeners are more likely to enjoy. Avoid obscure deep cuts unless the prompt specifically asks for hidden gems or rare tracks.
 - Aim for a playlist that a typical fan of the genre/mood would recognize and enjoy
 """
 
@@ -218,7 +216,7 @@ async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str
     """
     user_msg = f"""My music library contains:
 - Genres: {', '.join(library_summary.get('genres', [])[:80])}
-- Top artists ({library_summary.get('artist_count', 0)} total): {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:100])}
+- Top artists ({library_summary.get('artist_count', 0)} total): {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:50])}
 - Years: {library_summary.get('year_range', {}).get('min_year', '?')} to {library_summary.get('year_range', {}).get('max_year', '?')}
 - Total songs: {library_summary.get('song_count', 0)}
 {f"- Moods tagged: {', '.join(m['mood'] for m in library_summary.get('moods', [])[:40])}" if library_summary.get('moods') else ''}
@@ -244,26 +242,26 @@ async def pass2_select_songs(
     """
     Pass 2: Select and order songs from the filtered candidates.
     """
-    # Build candidate list text
+    # Build compact candidate list (semicolon-delimited, matches system prompt description)
     candidate_lines = []
     for c in candidates:
-        parts = [f"id={c['id']}", f'"{c["title"]}"', f"by {c['artist']}"]
-        if c.get("album"):
-            parts.append(f"[{c['album']}]")
-        if c.get("genre"):
-            parts.append(f"({c['genre']})")
-        if c.get("year"):
-            parts.append(f"{c['year']}")
+        dur = ""
         if c.get("duration") is not None:
             m, s = divmod(int(c["duration"]), 60)
-            parts.append(f"{m}:{s:02d}")
-        if c.get("bpm"):
-            parts.append(f"{c['bpm']}bpm")
-        if c.get("mood"):
-            parts.append(f"mood:{c['mood']}")
-        if c.get("popularity") is not None:
-            parts.append(f"pop:{c['popularity']}")
-        candidate_lines.append(" | ".join(parts))
+            dur = f"{m}:{s:02d}"
+        parts = [
+            str(c["id"]),
+            c["title"],
+            c["artist"],
+            c.get("album") or "",
+            c.get("genre") or "",
+            str(c["year"]) if c.get("year") else "",
+            dur,
+            str(c["bpm"]) if c.get("bpm") else "",
+            c.get("mood") or "",
+            str(c["popularity"]) if c.get("popularity") is not None else "",
+        ]
+        candidate_lines.append(";".join(parts))
 
     duration_note = ""
     if target_duration_min:
@@ -271,7 +269,7 @@ async def pass2_select_songs(
 
     user_msg = f"""Playlist prompt: "{prompt}"
 
-Select up to {max_songs} songs from these {len(candidates)} candidates.{duration_note}
+Select EXACTLY {max_songs} songs from these {len(candidates)} candidates. You MUST return exactly {max_songs} songs — no fewer, no more.{duration_note}
 
 Candidates:
 {chr(10).join(candidate_lines)}"""
@@ -283,5 +281,6 @@ Candidates:
     except (json.JSONDecodeError, ValueError):
         logger.error("Pass 2: failed to parse AI response: %s", text[:500])
         raise ValueError("AI returned an invalid response for Pass 2. Try again.")
-    logger.info("Pass 2: AI selected %d songs", len(result.get("songs", [])))
+    selected = result.get("song_ids") or result.get("songs", [])
+    logger.info("Pass 2: AI selected %d songs", len(selected))
     return result

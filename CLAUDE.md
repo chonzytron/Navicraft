@@ -46,7 +46,7 @@ unraid/
   - Pass 2: prompt + candidate list → final ordered playlist
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts
 - **Popularity scoring**: Multi-source enrichment (Spotify streaming popularity, Last.fm listeners/playcount, MusicBrainz ratings/release count, track position heuristic). Confidence-weighted blending. MusicBrainz skipped when Spotify/Last.fm already have good signal.
-- **Spotify rate limiting**: `_spotify_blocked_until` global timestamp blocks Spotify for 10 minutes after 3 consecutive 429s. Requests fast-fail (no sleep) on 429.
+- **Spotify rate limiting**: On 429, waits the Retry-After time and retries the same track. After recovery, slows to 1s delay for the rest of the batch. If the retry also 429s, enters a short cooldown (120s default, 600s max). No more "3 consecutive 429s" — each 429 is handled individually with a real backoff.
 - **Spotify top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `spotify_popularity IS NULL` are retroactively enriched using stored Last.fm/MB values for reblending.
 - **Enrichment lock**: `asyncio.Lock` in `popularity.py` prevents concurrent enrichment runs (startup scan, post-scan trigger, and scheduler all call `enrich_popularity`).
 - **SSE streaming** on `/api/generate` for real-time progress feedback. Includes `X-Accel-Buffering: no` and `Cache-Control: no-cache` headers to prevent Nginx proxy buffering.
@@ -137,10 +137,10 @@ docker compose up -d --build
 | DB write batch size | `50 tracks` | popularity.py |
 | Enrichment job interval | `2 minutes` | scheduler.py |
 | Scan job interval | `6 hours` (configurable) | scheduler.py / config.py |
-| Spotify delay | `0.2s` (5 req/s) | popularity.py |
+| Spotify delay | `0.3s` (3 req/s), `1.0s` after 429 recovery | popularity.py |
 | Last.fm delay | `0.25s` (4 req/s) | popularity.py |
 | MusicBrainz delay | `1.1s` | popularity.py |
-| Spotify cooldown on 429 | `600s (10 min)` | popularity.py |
+| Spotify cooldown on 429 | `120s` default, `600s` max | popularity.py |
 | Default songs in UI | `30` | frontend/index.html |
 | Default duration in UI | `90 min` | frontend/index.html |
 

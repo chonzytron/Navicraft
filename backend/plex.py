@@ -243,7 +243,7 @@ async def get_playlists() -> list[dict]:
             "id": str(p.get("ratingKey", "")),
             "name": p.get("title", ""),
             "songCount": p.get("leafCount", 0),
-            "duration": p.get("duration", 0) // 1000,  # Plex returns ms
+            "duration": (p.get("duration") or 0) // 1000,  # Plex returns ms
         }
         for p in playlists
     ]

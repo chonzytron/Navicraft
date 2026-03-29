@@ -42,7 +42,7 @@ unraid/
 - **Two-pass AI** to handle 20–50k song libraries without exceeding context limits:
   - Pass 1: prompt + compact library summary → structured filters (genres, years, artists, moods, excludes)
   - SQLite query narrows to ~500 candidates, biased by popularity with random jitter
-  - Per-artist diversity cap (max 15 tracks per artist) prevents one artist dominating candidates
+  - Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates; skipped when specific artists are requested
   - Pass 2: prompt + candidate list → final ordered playlist
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts
 - **Popularity scoring**: Multi-source enrichment (Spotify streaming popularity, Last.fm listeners/playcount, MusicBrainz ratings/release count, track position heuristic). Confidence-weighted blending. MusicBrainz skipped when Spotify/Last.fm already have good signal.
@@ -132,7 +132,7 @@ docker compose up -d --build
 | Gemini max_tokens | `32768` | ai_engine.py |
 | AI request timeout | `180s` | ai_engine.py |
 | Generation rate limit | `10s` | main.py |
-| Per-artist diversity cap | `15 tracks` | database.py |
+| Per-artist diversity cap | `30% of max_songs` (min 3, skipped for artist-specific prompts) | database.py |
 | Enrichment batch size | `500 tracks` | scheduler / main.py |
 | DB write batch size | `50 tracks` | popularity.py |
 | Enrichment job interval | `2 minutes` | scheduler.py |

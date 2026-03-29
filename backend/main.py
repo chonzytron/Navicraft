@@ -365,17 +365,17 @@ async def generate_playlist(req: GenerateRequest):
 
             # --- Filter candidates ---
             with db.get_db() as conn:
-                candidates = db.filter_tracks(conn, filters, limit=config.max_candidates)
+                candidates = db.filter_tracks(conn, filters, limit=config.max_candidates, max_songs=req.max_songs)
 
             if len(candidates) < 30:
                 yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, broadening search..."})
                 broad_filters = {"genres": filters.get("genres", [])}
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates)
+                    candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates, max_songs=req.max_songs)
 
             if len(candidates) < 20:
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, {}, limit=config.max_candidates)
+                    candidates = db.filter_tracks(conn, {}, limit=config.max_candidates, max_songs=req.max_songs)
 
             logger.info("Sending %d candidates to Pass 2", len(candidates))
 

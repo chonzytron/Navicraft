@@ -56,7 +56,6 @@ CREATE INDEX IF NOT EXISTS idx_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_year ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_mood ON tracks(mood);
 CREATE INDEX IF NOT EXISTS idx_navidrome_id ON tracks(navidrome_id);
-CREATE INDEX IF NOT EXISTS idx_plex_id ON tracks(plex_id);
 
 CREATE TABLE IF NOT EXISTS scan_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,11 +77,19 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 def init_db():
-    """Initialize the database and create tables."""
+    """Initialize the database and create tables.
+
+    Migration runs BEFORE indexes so that indexes on new columns
+    (e.g. plex_id) don't fail on databases created before those columns existed.
+    """
     os.makedirs(os.path.dirname(config.db_path), exist_ok=True)
     with get_db() as conn:
+        # Create tables first (skips if they already exist)
         conn.executescript(SCHEMA)
+        # Add any missing columns from newer versions
         _migrate(conn)
+        # Create indexes on migrated columns (safe now that columns exist)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plex_id ON tracks(plex_id)")
     logger.info("Database initialized at %s", config.db_path)
 
 

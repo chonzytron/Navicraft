@@ -70,7 +70,7 @@ Rules:
 - ONLY select songs from the provided candidate list, using their exact "id" values
 - Order songs for good flow — consider energy arc, key, tempo, and transitions
 - Mix artists — don't cluster songs by the same artist unless the prompt asks for it
-- If the user specified a number of songs or total duration, honor it
+- You MUST return EXACTLY the number of songs requested. If the user asks for 30 songs, return exactly 30 — not 20, not 25, but exactly 30. Only return fewer if there aren't enough candidates.
 - The "id" field is critical — it must match the candidate's id exactly
 - If few candidates match, include what fits and explain in the description
 - STRONGLY prefer songs with higher popularity scores (shown as "pop:XX" where XX is 0-100). These are well-known, beloved tracks that listeners are more likely to enjoy. Avoid obscure deep cuts unless the prompt specifically asks for hidden gems or rare tracks.
@@ -271,7 +271,7 @@ async def pass2_select_songs(
 
     user_msg = f"""Playlist prompt: "{prompt}"
 
-Select up to {max_songs} songs from these {len(candidates)} candidates.{duration_note}
+Select EXACTLY {max_songs} songs from these {len(candidates)} candidates. You MUST return exactly {max_songs} songs — no fewer, no more.{duration_note}
 
 Candidates:
 {chr(10).join(candidate_lines)}"""

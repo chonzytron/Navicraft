@@ -395,11 +395,12 @@ async def generate_playlist(req: GenerateRequest):
             # --- Match selections ---
             candidate_map = {c["id"]: c for c in candidates}
             matched_songs = []
-            for s in ai_result.get("songs", []):
-                # AI may return IDs as strings; normalise to int
+            # Support both compact song_ids format and legacy songs format
+            song_ids = ai_result.get("song_ids") or [s.get("id") for s in ai_result.get("songs", [])]
+            for raw_id in song_ids:
                 try:
-                    sid = int(s["id"])
-                except (KeyError, TypeError, ValueError):
+                    sid = int(raw_id)
+                except (TypeError, ValueError):
                     continue
                 track = candidate_map.get(sid)
                 if track:
@@ -412,7 +413,7 @@ async def generate_playlist(req: GenerateRequest):
                 "description": ai_result.get("description", ""),
                 "songs": matched_songs,
                 "total_matched": len(matched_songs),
-                "total_suggested": len(ai_result.get("songs", [])),
+                "total_suggested": len(ai_result.get("song_ids") or ai_result.get("songs", [])),
                 "total_duration": round(total_duration),
                 "filters_used": filters,
                 "candidates_found": len(candidates),

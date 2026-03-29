@@ -54,6 +54,7 @@ _spotify_token_expires: float = 0
 # skip Spotify entirely until this timestamp passes.
 # Honours Retry-After header if Spotify sends one.
 SPOTIFY_COOLDOWN_SECONDS = 600  # fallback cooldown if no Retry-After header
+SPOTIFY_MAX_COOLDOWN = 3600  # never wait longer than 1 hour, even if Retry-After says more
 _spotify_blocked_until: float = 0
 
 
@@ -133,6 +134,7 @@ async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
 def _set_spotify_cooldown(seconds: int):
     """Set the Spotify rate-limit cooldown and persist it to DB so restarts respect it."""
     global _spotify_blocked_until
+    seconds = min(seconds, SPOTIFY_MAX_COOLDOWN)
     _spotify_blocked_until = time.time() + seconds
     try:
         with db.get_db() as conn:
@@ -486,11 +488,16 @@ async def enrich_popularity(batch_size: int = 500):
                     stored = db.get_setting(conn, "spotify_blocked_until")
                 if stored:
                     val = float(stored)
-                    if val > time.time():
+                    remaining = val - time.time()
+                    if remaining > SPOTIFY_MAX_COOLDOWN:
+                        # Stale or absurdly long cooldown — discard it
+                        logger.info("Popularity: discarding stale Spotify cooldown (%ds remaining)", int(remaining))
+                        _spotify_blocked_until = 0
+                    elif remaining > 0:
                         _spotify_blocked_until = val
                         logger.info(
                             "Popularity: Spotify cooldown restored from DB — %ds remaining",
-                            int(val - time.time()),
+                            int(remaining),
                         )
             except Exception:
                 pass

@@ -711,7 +711,6 @@ async def enrich_popularity(batch_size: int = 500):
                         if not batch_result:
                             continue
 
-                        id_to_track = {t["spotify_id"]: t for t in chunk}
                         for track in chunk:
                             raw = batch_result.get(track["spotify_id"])
                             if raw:

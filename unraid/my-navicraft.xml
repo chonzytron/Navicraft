@@ -160,26 +160,8 @@
     Required="false"
     Mask="false">gemini-2.5-flash</Config>
 
-  <!-- Spotify (optional — best popularity data) -->
-  <Config
-    Name="Spotify Client ID"
-    Target="SPOTIFY_CLIENT_ID"
-    Default=""
-    Description="Spotify app Client ID for popularity data. Create a free app at https://developer.spotify.com/dashboard (no subscription needed)"
-    Type="Variable"
-    Display="always"
-    Required="false"
-    Mask="false"></Config>
-
-  <Config
-    Name="Spotify Client Secret"
-    Target="SPOTIFY_CLIENT_SECRET"
-    Default=""
-    Description="Spotify app Client Secret"
-    Type="Variable"
-    Display="always"
-    Required="false"
-    Mask="true"></Config>
+  <!-- Deezer — no configuration needed (free API, no key required) -->
+  <!-- Popularity data is fetched from Deezer automatically -->
 
   <!-- Last.fm (optional — improves popularity scoring) -->
   <Config

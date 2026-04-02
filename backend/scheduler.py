@@ -47,21 +47,21 @@ async def _scheduled_enrichment():
     Runs every 2 minutes, processing 500 tracks per batch.
     Covers three cases:
     - New tracks needing full enrichment (popularity IS NULL)
-    - Tracks missing Spotify data (added when Spotify was rate-limited)
+    - Tracks missing Deezer data (added when Deezer was rate-limited)
     - Tracks missing Last.fm data (added when Last.fm was unavailable)
     """
     try:
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
-            missing_spotify = db.count_tracks_missing_spotify(conn)
+            missing_deezer = db.count_tracks_missing_deezer(conn)
             missing_lastfm = db.count_tracks_missing_lastfm(conn)
 
-        if remaining == 0 and missing_spotify == 0 and missing_lastfm == 0:
+        if remaining == 0 and missing_deezer == 0 and missing_lastfm == 0:
             return
 
         logger.info(
-            "Enrichment job: %d unscored, %d missing Spotify, %d missing Last.fm",
-            remaining, missing_spotify, missing_lastfm,
+            "Enrichment job: %d unscored, %d missing Deezer, %d missing Last.fm",
+            remaining, missing_deezer, missing_lastfm,
         )
         result = await popularity.enrich_popularity(batch_size=500)
         logger.info("Enrichment job done: %s", result)
@@ -84,9 +84,8 @@ def start_scheduler():
     )
 
     # Popularity enrichment — runs every 2 minutes until all tracks are scored.
-    # Each batch is 500 tracks. With the two-phase pipeline (Last.fm at 5 req/s,
-    # then MusicBrainz at 1 req/s only for non-popular tracks), this keeps
-    # enrichment running back-to-back with minimal gaps.
+    # Each batch is 500 tracks. With the two-source pipeline (Deezer at ~10 req/s,
+    # Last.fm at 5 req/s), this keeps enrichment running back-to-back with minimal gaps.
     _scheduler.add_job(
         _scheduled_enrichment,
         trigger=IntervalTrigger(minutes=2),

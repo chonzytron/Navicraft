@@ -372,15 +372,15 @@ function pollEnrichment(){
   const check=async()=>{
     try{
       const s=await api('/popularity/status');
-      const incomplete=s.remaining>0||s.spotify_missing>0||s.lastfm_missing>0;
+      const incomplete=s.remaining>0||s.deezer_missing>0||s.lastfm_missing>0;
       if(incomplete){
         $('#enrichBar').classList.add('on');
+        const dzPct=s.deezer_percent??0;
         const lfPct=s.lastfm_percent??0;
-        const spPct=s.spotify_percent??0;
+        $('#enrichFillDeezer').style.width=`${dzPct}%`;
+        $('#enrichTextDeezer').textContent=`${dzPct}%`;
         $('#enrichFillLastfm').style.width=`${lfPct}%`;
         $('#enrichTextLastfm').textContent=`${lfPct}%`;
-        $('#enrichFillSpotify').style.width=`${spPct}%`;
-        $('#enrichTextSpotify').textContent=`${spPct}%`;
       }else{
         $('#enrichBar').classList.remove('on');
       }

@@ -15,7 +15,7 @@ backend/
 ├── ai_engine.py     # Two-pass AI: intent extraction → SQLite filter → song selection
 ├── navidrome.py     # Subsonic API client (playlist CRUD + ID sync, with retry logic)
 ├── plex.py          # Plex HTTP API client (playlist CRUD + ID sync, with retry logic)
-├── popularity.py    # Multi-source enrichment: Spotify + Last.fm + MusicBrainz + track position
+├── popularity.py    # Multi-source enrichment: Deezer + Last.fm + track position
 ├── scheduler.py     # APScheduler for periodic scans (configurable, default 6h) and enrichment (2m)
 └── requirements.txt
 
@@ -45,9 +45,9 @@ unraid/
   - Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates; skipped when specific artists are requested
   - Pass 2: prompt + candidate list → final ordered playlist
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts
-- **Popularity scoring**: Multi-source enrichment (Spotify streaming popularity, Last.fm listeners/playcount, MusicBrainz ratings/release count, track position heuristic). Confidence-weighted blending. MusicBrainz skipped when Spotify/Last.fm already have good signal.
-- **Spotify rate limiting**: On 429, waits the Retry-After time and retries the same track. After recovery, slows to 1s delay for the rest of the batch. If the retry also 429s, enters a short cooldown (120s default, 600s max). No more "3 consecutive 429s" — each 429 is handled individually with a real backoff.
-- **Spotify top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `spotify_popularity IS NULL` are retroactively enriched using stored Last.fm/MB values for reblending.
+- **Popularity scoring**: Multi-source enrichment (Deezer rank, Last.fm listeners/playcount, track position heuristic). Confidence-weighted blending. Deezer is free with no auth needed (50 req/5s rate limit).
+- **Deezer rate limiting**: On 429 or quota error, waits 5s and retries. After recovery, slows to 0.5s delay for the rest of the batch.
+- **Deezer top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `deezer_rank IS NULL` are retroactively enriched using stored Last.fm values for reblending.
 - **Enrichment lock**: `asyncio.Lock` in `popularity.py` prevents concurrent enrichment runs (startup scan, post-scan trigger, and scheduler all call `enrich_popularity`).
 - **SSE streaming** on `/api/generate` for real-time progress feedback. Includes `X-Accel-Buffering: no` and `Cache-Control: no-cache` headers to prevent Nginx proxy buffering.
 - **Rate limiting**: 10s cooldown on `/api/generate` to prevent double-clicks
@@ -137,10 +137,8 @@ docker compose up -d --build
 | DB write batch size | `50 tracks` | popularity.py |
 | Enrichment job interval | `2 minutes` | scheduler.py |
 | Scan job interval | `6 hours` (configurable) | scheduler.py / config.py |
-| Spotify delay | `0.3s` (3 req/s), `1.0s` after 429 recovery | popularity.py |
+| Deezer delay | `0.1s` (10 req/s), `0.5s` after rate limit recovery | popularity.py |
 | Last.fm delay | `0.25s` (4 req/s) | popularity.py |
-| MusicBrainz delay | `1.1s` | popularity.py |
-| Spotify cooldown on 429 | `120s` default, `600s` max | popularity.py |
 | Default songs in UI | `30` | frontend/index.html |
 | Default duration in UI | `90 min` | frontend/index.html |
 

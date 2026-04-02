@@ -62,8 +62,6 @@ docker compose up -d --build
 | `CLAUDE_MODEL` | `claude-3-5-sonnet-20241022` | Claude model |
 | `GEMINI_API_KEY` | — | Google Gemini API key |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
-| `SPOTIFY_CLIENT_ID` | — | Spotify app client ID (free, best popularity signal) |
-| `SPOTIFY_CLIENT_SECRET` | — | Spotify app client secret |
 | `LASTFM_API_KEY` | — | Last.fm API key (free, improves popularity) |
 | `SCAN_INTERVAL_HOURS` | `6` | How often to auto-scan the library |
 
@@ -85,7 +83,7 @@ Connection status for each configured server is shown in the NaviCraft header wi
 | Claude (Anthropic) | If using Claude | Pay-per-use (separate from Claude.ai subscription) | [console.anthropic.com](https://console.anthropic.com) |
 | Gemini (Google) | If using Gemini | Free tier available | [aistudio.google.com](https://aistudio.google.com) |
 | Plex Token | If using Plex | Free (part of Plex) | [Finding your token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) |
-| Spotify | Optional | Free developer app | [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) |
+| Deezer | Automatic | Free, no key needed | — |
 | Last.fm | Optional | Free | [last.fm/api/account/create](https://www.last.fm/api/account/create) |
 
 > **Claude API vs Claude.ai:** A Claude Pro/Team subscription does **not** grant API access. The API requires separate credits at console.anthropic.com. Gemini is a good free alternative.
@@ -113,8 +111,8 @@ docker logs -f navicraft
 - Verify the directory is readable: `ls /mnt/user/media/music`
 
 **Popularity not enriching:**
-- Check logs for API errors: `docker logs navicraft | grep -i spotify`
-- Spotify rate limits trigger a 10-minute cooldown; this is normal
+- Check logs for API errors: `docker logs navicraft | grep -i deezer`
+- Deezer rate limits are generous (50 req/5s); if hit, NaviCraft slows down automatically
 
 **AI generation failing:**
 - Check logs for the actual error: `docker logs navicraft | grep ERROR`

@@ -35,11 +35,6 @@ class Config:
     # Last.fm API (optional — for popularity enrichment)
     lastfm_api_key: str = field(default_factory=lambda: os.getenv("LASTFM_API_KEY", ""))
 
-    # Spotify API (optional — for popularity enrichment)
-    # Get free credentials at https://developer.spotify.com/dashboard
-    spotify_client_id: str = field(default_factory=lambda: os.getenv("SPOTIFY_CLIENT_ID", ""))
-    spotify_client_secret: str = field(default_factory=lambda: os.getenv("SPOTIFY_CLIENT_SECRET", ""))
-
     # AI settings
     max_candidates: int = field(default_factory=lambda: int(os.getenv("MAX_CANDIDATES", "500")))
 

@@ -2,10 +2,9 @@
 Multi-source popularity enrichment for tracks.
 
 Sources (weighted by data quality):
-1. Spotify — popularity score (0-100) from real streaming data (best signal)
+1. Deezer — track rank from real streaming data (best signal, no auth needed)
 2. Last.fm — listener count + playcount (real-world usage from millions of users)
-3. MusicBrainz — community ratings + release count (how many compilations/releases)
-4. Track position heuristic — early album tracks (1-3) are more likely singles/hits
+3. Track position heuristic — early album tracks (1-3) are more likely singles/hits
 
 Scoring philosophy:
 - Each source contributes a weighted sub-score based on how much data it has
@@ -13,12 +12,11 @@ Scoring philosophy:
 - Unknown tracks get a neutral baseline (50) so they're not buried
 
 Pipeline strategy:
-- Phase 1: Spotify + Last.fm lookups concurrently (both fast, ~5-30 req/s)
-- Phase 2: MusicBrainz only for tracks not well-covered by Phase 1 (1 req/s)
+- Phase 1: Deezer + Last.fm lookups (both fast, up to 50 req/5s and 5 req/s)
+- Deezer API is free with no authentication — 50 requests per 5 seconds
 """
 
 import asyncio
-import base64
 import logging
 import math
 import time
@@ -32,155 +30,65 @@ logger = logging.getLogger(__name__)
 # Prevents concurrent enrichment runs (startup, post-scan, and scheduler can all call this)
 _enrichment_lock = asyncio.Lock()
 
-# --- MusicBrainz ---
-MB_BASE = "https://musicbrainz.org/ws/2"
-MB_USER_AGENT = "NaviCraft/1.0 (https://github.com/chonzytron/navicraft)"
-MB_DELAY = 1.1  # seconds between requests
+# --- Deezer ---
+DEEZER_SEARCH_URL = "https://api.deezer.com/search"
+DEEZER_DELAY = 0.1  # 10 req/s — well within the 50 req/5s limit
+DEEZER_SLOWDOWN_DELAY = 0.5  # slower rate after recovering from rate limiting
 
 # --- Last.fm ---
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 LASTFM_DELAY = 0.25  # 5 req/sec allowed
 
-# --- Spotify ---
-SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
-SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
-SPOTIFY_DELAY = 0.3  # ~3 req/s — within Spotify's Client Credentials limit
-SPOTIFY_SLOWDOWN_DELAY = 1.0  # slower rate after recovering from a 429
 
-# Spotify token cache
-_spotify_token: str | None = None
-_spotify_token_expires: float = 0
-
-# Spotify rate-limit cooldown — set when a batch gets rate-limited,
-# skip Spotify entirely until this timestamp passes.
-# Honours Retry-After header if Spotify sends one.
-SPOTIFY_COOLDOWN_SECONDS = 120  # fallback cooldown if no Retry-After header
-SPOTIFY_MAX_COOLDOWN = 600  # never wait longer than 10 minutes, even if Retry-After says more
-_spotify_blocked_until: float = 0
-
-
-async def _get_spotify_token(client: httpx.AsyncClient) -> str | None:
-    """Get or refresh Spotify access token using Client Credentials flow."""
-    global _spotify_token, _spotify_token_expires
-
-    if _spotify_token and time.time() < _spotify_token_expires - 60:
-        return _spotify_token
-
-    try:
-        auth = base64.b64encode(
-            f"{config.spotify_client_id}:{config.spotify_client_secret}".encode()
-        ).decode()
-        resp = await client.post(
-            SPOTIFY_TOKEN_URL,
-            headers={
-                "Authorization": f"Basic {auth}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data={"grant_type": "client_credentials"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        _spotify_token = data["access_token"]
-        _spotify_token_expires = time.time() + data.get("expires_in", 3600)
-        logger.info("Spotify token acquired (expires in %ds)", data.get("expires_in", 3600))
-        return _spotify_token
-    except Exception as e:
-        logger.warning("Spotify token acquisition failed: %s", e)
-        return None
-
-
-async def _lookup_spotify(client: httpx.AsyncClient, artist: str, title: str,
-                          token: str) -> dict | None:
+async def _lookup_deezer(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:
     """
-    Look up a track on Spotify. Returns the popularity score (0-100),
-    or {"rate_limited": True} if the API is throttling us.
-    Does NOT sleep/retry on 429 — the caller tracks consecutive hits
-    and disables Spotify for the batch after SPOTIFY_429_LIMIT misses.
+    Look up a track on Deezer. Returns the rank (0-1000000) and deezer_id,
+    or {"not_found": True} if the track doesn't exist on Deezer.
+    No authentication needed — the Deezer API is free.
     """
     try:
-        query = f"track:{title} artist:{artist}"
+        query = f'artist:"{artist}" track:"{title}"'
         resp = await client.get(
-            SPOTIFY_SEARCH_URL,
-            params={"q": query, "type": "track", "limit": 3},
-            headers={"Authorization": f"Bearer {token}"},
+            DEEZER_SEARCH_URL,
+            params={"q": query, "limit": 5},
         )
         if resp.status_code == 429:
-            retry_after = resp.headers.get("Retry-After")
-            return {"rate_limited": True, "retry_after": int(retry_after) if retry_after and retry_after.isdigit() else None}
-        if resp.status_code == 401:
-            return None
+            return {"rate_limited": True}
         resp.raise_for_status()
         data = resp.json()
 
-        tracks = data.get("tracks", {}).get("items", [])
+        # Deezer returns errors as JSON with an "error" key
+        if "error" in data:
+            error_code = data["error"].get("code", 0)
+            if error_code == 4:  # Quota limit exceeded
+                return {"rate_limited": True}
+            logger.debug("Deezer API error: %s", data["error"])
+            return None
+
+        tracks = data.get("data", [])
         if not tracks:
-            return {"not_found": True}  # API worked, track simply doesn't exist on Spotify
+            return {"not_found": True}
 
         artist_lower = artist.lower()
         for track in tracks:
-            track_artists = [a["name"].lower() for a in track.get("artists", [])]
-            if any(artist_lower in a or a in artist_lower for a in track_artists):
-                return {"popularity": track.get("popularity", 0), "spotify_id": track.get("id")}
-
-        return {"popularity": tracks[0].get("popularity", 0), "spotify_id": tracks[0].get("id")}
-
-    except (httpx.HTTPStatusError, ValueError, KeyError) as e:
-        logger.debug("Spotify lookup failed for '%s - %s': %s", artist, title, e)
-        return None
-    except Exception as e:
-        logger.debug("Spotify error for '%s - %s': %s", artist, title, e)
-        return None
-
-
-def _set_spotify_cooldown(seconds: int):
-    """Set the Spotify rate-limit cooldown and persist it to DB so restarts respect it."""
-    global _spotify_blocked_until
-    seconds = min(seconds, SPOTIFY_MAX_COOLDOWN)
-    _spotify_blocked_until = time.time() + seconds
-    try:
-        with db.get_db() as conn:
-            db.set_setting(conn, "spotify_blocked_until", str(_spotify_blocked_until))
-    except Exception as e:
-        logger.debug("Could not persist Spotify cooldown: %s", e)
-
-
-async def _batch_lookup_spotify(
-    client: httpx.AsyncClient, spotify_ids: list[str], token: str
-) -> dict[str, dict] | None:
-    """
-    Fetch up to 50 tracks at once using the batch endpoint GET /v1/tracks?ids=...
-    Returns a dict mapping spotify_id → {"popularity": N, "spotify_id": id},
-    or {"rate_limited": True, "retry_after": N} on 429.
-    Much more efficient than individual searches for tracks we already have IDs for.
-    """
-    try:
-        resp = await client.get(
-            "https://api.spotify.com/v1/tracks",
-            params={"ids": ",".join(spotify_ids[:50])},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        if resp.status_code == 429:
-            retry_after = resp.headers.get("Retry-After")
-            return {"rate_limited": True, "retry_after": int(retry_after) if retry_after and retry_after.isdigit() else None}
-        if resp.status_code == 401:
-            return None
-        resp.raise_for_status()
-        data = resp.json()
-
-        result = {}
-        for track in data.get("tracks", []):
-            if track and track.get("id"):
-                result[track["id"]] = {
-                    "popularity": track.get("popularity", 0),
-                    "spotify_id": track["id"],
+            track_artist = (track.get("artist", {}).get("name", "")).lower()
+            if artist_lower in track_artist or track_artist in artist_lower:
+                return {
+                    "rank": track.get("rank", 0),
+                    "deezer_id": str(track.get("id", "")),
                 }
-        return result
+
+        # Fallback to first result
+        return {
+            "rank": tracks[0].get("rank", 0),
+            "deezer_id": str(tracks[0].get("id", "")),
+        }
 
     except (httpx.HTTPStatusError, ValueError, KeyError) as e:
-        logger.debug("Spotify batch lookup failed: %s", e)
+        logger.debug("Deezer lookup failed for '%s - %s': %s", artist, title, e)
         return None
     except Exception as e:
-        logger.debug("Spotify batch error: %s", e)
+        logger.debug("Deezer error for '%s - %s': %s", artist, title, e)
         return None
 
 
@@ -225,79 +133,33 @@ async def _lookup_lastfm(client: httpx.AsyncClient, artist: str, title: str) -> 
         return None
 
 
-async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str) -> dict | None:
+def _deezer_score(deezer: dict) -> tuple[float, float]:
     """
-    Look up a recording on MusicBrainz by artist + title.
-    Returns search score, community rating, and release count.
+    Derive a score (0-100) and confidence (0-1) from Deezer data.
+
+    Deezer rank ranges from 0 to ~1,000,000. Higher = more popular.
+    We map this to a 0-100 scale using a logarithmic curve.
     """
-    query = f'recording:"{title}" AND artist:"{artist}"'
-    try:
-        resp = await client.get(
-            f"{MB_BASE}/recording",
-            params={
-                "query": query,
-                "fmt": "json",
-                "limit": "3",
-            },
-        )
-        if resp.status_code == 503:
-            await asyncio.sleep(3)
-            return None
-        resp.raise_for_status()
-        data = resp.json()
+    rank = deezer.get("rank", 0)
+    if rank <= 0:
+        return 0.0, 0.1  # Track exists on Deezer but has ~0 rank
 
-        recordings = data.get("recordings", [])
-        if not recordings:
-            return None
+    # Map rank (0-1M) to 0-100 via log scale
+    # rank ~1000 -> ~30, ~10000 -> ~45, ~100000 -> ~65, ~500000 -> ~82, ~900000 -> ~95
+    log_score = math.log10(max(rank, 1)) / math.log10(1_000_000) * 100
+    score = min(100, max(0, log_score))
 
-        best = recordings[0]
-        score = best.get("score", 0)
-        rating_info = best.get("rating", {})
-        mb_rating = rating_info.get("value")  # 0-5 scale
-        votes_count = rating_info.get("votes-count", 0)
-
-        # Count how many releases this recording appears on.
-        # Songs on many releases (compilations, best-ofs, soundtracks) = hits.
-        release_count = len(best.get("releases", []))
-
-        return {
-            "score": score,
-            "mb_rating": mb_rating,
-            "mb_rating_count": votes_count,
-            "release_count": release_count,
-        }
-
-    except (httpx.HTTPStatusError, ValueError) as e:
-        logger.debug("MusicBrainz lookup failed for '%s - %s': %s", artist, title, e)
-        return None
-    except Exception as e:
-        logger.debug("MusicBrainz error for '%s - %s': %s", artist, title, e)
-        return None
-
-
-def _spotify_score(spotify: dict) -> tuple[float, float]:
-    """
-    Derive a score (0-100) and confidence (0-1) from Spotify data.
-
-    Spotify popularity is already 0-100 and based on real streaming data,
-    so it's the most reliable signal. We use it nearly as-is.
-    """
-    pop = spotify.get("popularity", 0)
-    if pop <= 0:
-        return 0.0, 0.1  # Track exists on Spotify but has ~0 plays
-
-    # Spotify popularity is already well-calibrated
-    score = float(pop)
-
-    # High confidence for any Spotify data — it's the best signal
-    if pop >= 50:
+    # Confidence based on rank magnitude
+    if rank >= 500_000:
         confidence = 1.0
-    elif pop >= 20:
+    elif rank >= 100_000:
         confidence = 0.9
-    elif pop >= 5:
+    elif rank >= 10_000:
         confidence = 0.7
-    else:
+    elif rank >= 1_000:
         confidence = 0.5
+    else:
+        confidence = 0.3
 
     return score, confidence
 
@@ -344,70 +206,6 @@ def _lastfm_score(lastfm: dict) -> tuple[float, float]:
     return base, confidence
 
 
-def _musicbrainz_score(mb: dict) -> tuple[float, float]:
-    """
-    Derive a score (0-100) and confidence weight (0-1) from MusicBrainz data.
-
-    Uses three signals:
-    - Community rating (0-5 scale, if votes exist)
-    - Release count (songs on many releases = well-known)
-    - Search relevance score (well-indexed = more notable)
-    """
-    mb_rating = mb.get("mb_rating")
-    votes = mb.get("mb_rating_count", 0)
-    release_count = mb.get("release_count", 0)
-    search_score = mb.get("score", 0)
-
-    components = []
-    total_weight = 0
-
-    # Community rating — only trust it with enough votes
-    if mb_rating is not None and votes > 0:
-        rating_norm = (mb_rating / 5.0) * 100
-        if votes >= 10:
-            components.append(rating_norm * 0.5)
-            total_weight += 0.5
-        elif votes >= 3:
-            components.append(rating_norm * 0.3)
-            total_weight += 0.3
-        else:
-            components.append(rating_norm * 0.1)
-            total_weight += 0.1
-
-    # Release count — appearing on compilations/best-ofs is a strong hit signal
-    if release_count > 0:
-        # 1 release = normal, 3+ = likely single, 5+ = definite hit
-        release_score = min(90, 40 + release_count * 10)
-        release_weight = min(0.4, release_count * 0.08)
-        components.append(release_score * release_weight)
-        total_weight += release_weight
-
-    # Search score — baseline signal, always available
-    search_weight = max(0.1, 0.5 - total_weight)
-    components.append(search_score * search_weight)
-    total_weight += search_weight
-
-    if total_weight > 0:
-        score = sum(components) / total_weight
-    else:
-        score = search_score * 0.6
-
-    # Confidence depends on how much real data we have
-    confidence = 0.0
-    if votes >= 10:
-        confidence = 0.7
-    elif votes >= 3:
-        confidence = 0.5
-    elif release_count >= 3:
-        confidence = 0.45
-    elif search_score >= 90:
-        confidence = 0.3
-    else:
-        confidence = 0.2
-
-    return min(100, max(0, score)), confidence
-
-
 def _track_position_bonus(track_number: int | None) -> int:
     """
     Albums typically front-load singles and stronger tracks.
@@ -425,7 +223,7 @@ def _track_position_bonus(track_number: int | None) -> int:
     return 0
 
 
-def _blend_scores(spotify: dict | None, lastfm: dict | None, mb: dict | None,
+def _blend_scores(deezer: dict | None, lastfm: dict | None,
                   track_number: int | None) -> int:
     """
     Combine all sources into a single 0-100 score.
@@ -436,17 +234,13 @@ def _blend_scores(spotify: dict | None, lastfm: dict | None, mb: dict | None,
     """
     scores_and_weights = []
 
-    if spotify and spotify.get("popularity", 0) > 0:
-        sp_score, sp_conf = _spotify_score(spotify)
-        scores_and_weights.append((sp_score, sp_conf))
+    if deezer and deezer.get("rank", 0) > 0:
+        dz_score, dz_conf = _deezer_score(deezer)
+        scores_and_weights.append((dz_score, dz_conf))
 
     if lastfm and lastfm.get("listeners", 0) > 0:
         lfm_score, lfm_conf = _lastfm_score(lastfm)
         scores_and_weights.append((lfm_score, lfm_conf))
-
-    if mb and mb.get("score", 0) > 0:
-        mb_score, mb_conf = _musicbrainz_score(mb)
-        scores_and_weights.append((mb_score, mb_conf))
 
     if not scores_and_weights:
         # No external data at all — neutral baseline
@@ -470,8 +264,7 @@ async def enrich_popularity(batch_size: int = 500):
     Fetch popularity scores for tracks that don't have one yet.
 
     Pipeline (per track, so DB is updated incrementally):
-    - Spotify lookup (if configured), then Last.fm lookup (if configured),
-      then MusicBrainz only for tracks not well-covered by Spotify/Last.fm.
+    - Deezer lookup (free, no auth), then Last.fm lookup (if configured).
     - DB write happens immediately after each track so progress is visible.
     """
     if _enrichment_lock.locked():
@@ -480,38 +273,13 @@ async def enrich_popularity(batch_size: int = 500):
 
     await _enrichment_lock.acquire()
     try:
-        global _spotify_blocked_until
-
-        # Restore Spotify cooldown from DB on first run after a restart
-        if _spotify_blocked_until == 0:
-            try:
-                with db.get_db() as conn:
-                    stored = db.get_setting(conn, "spotify_blocked_until")
-                if stored:
-                    val = float(stored)
-                    remaining = val - time.time()
-                    if remaining > SPOTIFY_MAX_COOLDOWN:
-                        # Stale or absurdly long cooldown — discard it
-                        logger.info("Popularity: discarding stale Spotify cooldown (%ds remaining)", int(remaining))
-                        _spotify_blocked_until = 0
-                    elif remaining > 0:
-                        _spotify_blocked_until = val
-                        logger.info(
-                            "Popularity: Spotify cooldown restored from DB — %ds remaining",
-                            int(remaining),
-                        )
-            except Exception:
-                pass
-
         with db.get_db() as conn:
             tracks = db.get_tracks_without_popularity(conn, limit=batch_size)
 
         has_lastfm = bool(config.lastfm_api_key)
-        has_spotify = bool(config.spotify_client_id and config.spotify_client_secret)
 
         enriched = 0
         skipped = 0
-        needs_mb_count = 0
         WRITE_BATCH = 50  # flush to DB every N tracks
 
         pending: list[tuple] = []  # buffered rows for bulk write
@@ -527,31 +295,18 @@ async def enrich_popularity(batch_size: int = 500):
 
         async with httpx.AsyncClient(
             timeout=15,
-            headers={"User-Agent": MB_USER_AGENT, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
         ) as client:
-            # Get Spotify token if configured
-            spotify_token = None
-            if has_spotify:
-                if time.time() < _spotify_blocked_until:
-                    remaining_cooldown = int(_spotify_blocked_until - time.time())
-                    logger.info("Popularity: Spotify in cooldown for %ds more — skipping this batch", remaining_cooldown)
-                else:
-                    spotify_token = await _get_spotify_token(client)
-                    if not spotify_token:
-                        logger.warning("Popularity: Spotify token failed, continuing without Spotify")
 
             if not tracks:
-                logger.info("Popularity: all tracks already enriched — checking Spotify top-up")
+                logger.info("Popularity: all tracks already enriched — checking Deezer top-up")
             else:
-                sources = []
-                if spotify_token:
-                    sources.append("Spotify")
+                sources = ["Deezer"]
                 if has_lastfm:
                     sources.append("Last.fm")
-                sources.append("MusicBrainz (fallback)")
                 logger.info("Popularity: enriching %d tracks via %s", len(tracks), " + ".join(sources))
 
-            spotify_delay = SPOTIFY_DELAY  # adaptive: slows after 429 recovery
+            deezer_delay = DEEZER_DELAY  # adaptive: slows after rate limit recovery
 
             if tracks:
                 for track in tracks:
@@ -560,48 +315,36 @@ async def enrich_popularity(batch_size: int = 500):
                     track_number = track.get("track_number")
 
                     if not artist or not title:
-                        pending.append((30, None, 0, None, None, None, None, None, None, track["id"]))
+                        pending.append((30, None, None, None, None, None, track["id"]))
                         skipped += 1
                     else:
                         now = time.time()
-                        # Spotify
-                        spotify_result = None
-                        spotify_checked_at = None
-                        if spotify_token:
-                            raw = await _lookup_spotify(client, artist, title, spotify_token)
+                        # Deezer
+                        deezer_result = None
+                        deezer_checked_at = None
+                        raw = await _lookup_deezer(client, artist, title)
+                        if raw and raw.get("rate_limited"):
+                            # Wait and retry
+                            logger.info("Popularity: Deezer rate limited — waiting 5s before retry")
+                            await asyncio.sleep(5)
+                            raw = await _lookup_deezer(client, artist, title)
                             if raw and raw.get("rate_limited"):
-                                # Wait out the rate limit and retry this same track
-                                retry_wait = min(raw.get("retry_after") or 5, 30)
-                                logger.info(
-                                    "Popularity: Spotify 429 — waiting %ds before retry (Retry-After: %s)",
-                                    retry_wait, raw.get("retry_after"),
-                                )
-                                await asyncio.sleep(retry_wait)
-                                raw = await _lookup_spotify(client, artist, title, spotify_token)
-                                if raw and raw.get("rate_limited"):
-                                    # Still rate-limited after waiting — short cooldown
-                                    cooldown = min(raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS, SPOTIFY_MAX_COOLDOWN)
-                                    logger.warning(
-                                        "Popularity: Spotify still rate-limited after retry — cooldown %ds", cooldown
-                                    )
-                                    _set_spotify_cooldown(cooldown)
-                                    spotify_token = None
-                                else:
-                                    # Recovered — slow down for the rest of the batch
-                                    spotify_delay = SPOTIFY_SLOWDOWN_DELAY
-                                    logger.info("Popularity: Spotify recovered after 429 — slowing to %.1fs delay", spotify_delay)
-                                    if raw and raw.get("not_found"):
-                                        spotify_checked_at = now
-                                    elif raw:
-                                        spotify_result = raw
-                                        spotify_checked_at = now
-                            elif raw and raw.get("not_found"):
-                                spotify_checked_at = now  # confirmed not on Spotify, retry tomorrow
-                            elif raw:
-                                spotify_result = raw
-                                spotify_checked_at = now
-                            if spotify_token:
-                                await asyncio.sleep(spotify_delay)
+                                logger.warning("Popularity: Deezer still rate limited — slowing down")
+                                deezer_delay = DEEZER_SLOWDOWN_DELAY
+                            else:
+                                deezer_delay = DEEZER_SLOWDOWN_DELAY
+                                logger.info("Popularity: Deezer recovered — slowing to %.1fs delay", deezer_delay)
+                                if raw and raw.get("not_found"):
+                                    deezer_checked_at = now
+                                elif raw:
+                                    deezer_result = raw
+                                    deezer_checked_at = now
+                        elif raw and raw.get("not_found"):
+                            deezer_checked_at = now  # confirmed not on Deezer, retry tomorrow
+                        elif raw:
+                            deezer_result = raw
+                            deezer_checked_at = now
+                        await asyncio.sleep(deezer_delay)
 
                         # Last.fm
                         lastfm_result = None
@@ -615,25 +358,14 @@ async def enrich_popularity(batch_size: int = 500):
                                 lastfm_result = raw_lfm
                                 lastfm_checked_at = now
 
-                        # MusicBrainz — only when neither Spotify nor Last.fm returned anything
-                        has_good_spotify = (spotify_result and spotify_result.get("popularity", 0) >= 20)
-                        has_good_lastfm = bool(lastfm_result and lastfm_result.get("listeners") is not None)
-                        mb_result = None
-                        if not (has_good_spotify or has_good_lastfm):
-                            mb_result = await _lookup_musicbrainz(client, artist, title)
-                            await asyncio.sleep(MB_DELAY)
-                            needs_mb_count += 1
-
-                        popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track_number)
+                        popularity = _blend_scores(deezer_result, lastfm_result, track_number)
                         pending.append((
                             popularity,
-                            mb_result.get("mb_rating") if mb_result else None,
-                            mb_result.get("mb_rating_count", 0) if mb_result else 0,
                             lastfm_result.get("listeners") if lastfm_result else None,
                             lastfm_result.get("playcount") if lastfm_result else None,
-                            spotify_result.get("popularity") if spotify_result else None,
-                            spotify_result.get("spotify_id") if spotify_result else None,
-                            spotify_checked_at,
+                            deezer_result.get("rank") if deezer_result else None,
+                            deezer_result.get("deezer_id") if deezer_result else None,
+                            deezer_checked_at,
                             lastfm_checked_at,
                             track["id"],
                         ))
@@ -643,144 +375,81 @@ async def enrich_popularity(batch_size: int = 500):
                         flush_pending()
 
                     if (enriched + skipped) % 100 == 0:
-                        logger.info("Popularity: %d enriched, %d skipped so far (%d MB lookups)", enriched, skipped, needs_mb_count)
+                        logger.info("Popularity: %d enriched, %d skipped so far", enriched, skipped)
 
                 flush_pending()  # write any remaining tracks
 
-            # --- Spotify top-up pass ---
-            # Fill in tracks enriched without Spotify data (e.g. during a prior cooldown).
-            # Strategy: tracks with a stored spotify_id → single batch request (50 at once,
-            # ~50x fewer API calls). Tracks without an ID → individual search.
-            spotify_topup = 0
-            if spotify_token:
-                with db.get_db() as conn:
-                    missing_spotify = db.get_tracks_missing_spotify(conn, limit=batch_size)
+            # --- Deezer top-up pass ---
+            # Fill in tracks enriched without Deezer data (e.g. during a prior rate limit).
+            deezer_topup = 0
+            with db.get_db() as conn:
+                missing_deezer = db.get_tracks_missing_deezer(conn, limit=batch_size)
 
-                if missing_spotify:
-                    have_id = [t for t in missing_spotify if t.get("spotify_id")]
-                    need_search = [t for t in missing_spotify if not t.get("spotify_id")]
-                    logger.info(
-                        "Popularity: Spotify top-up — %d tracks missing (%d batch, %d search)",
-                        len(missing_spotify), len(have_id), len(need_search),
-                    )
-                    topup_pending: list[tuple] = []
-                    not_found_ids: list[int] = []
+            if missing_deezer:
+                logger.info("Popularity: Deezer top-up — %d tracks missing Deezer data", len(missing_deezer))
+                topup_pending: list[tuple] = []
+                not_found_ids: list[int] = []
+                topup_delay = DEEZER_DELAY
 
-                    def _topup_row(track, raw):
-                        lastfm_result = None
-                        if track.get("lastfm_listeners") is not None:
-                            lastfm_result = {
-                                "listeners": track["lastfm_listeners"],
-                                "playcount": track.get("lastfm_playcount"),
-                            }
-                        mb_result = None
-                        if track.get("mb_rating") is not None:
-                            mb_result = {
-                                "mb_rating": track["mb_rating"],
-                                "mb_rating_count": track.get("mb_rating_count", 0),
-                            }
-                        new_pop = _blend_scores(raw, lastfm_result, mb_result, track.get("track_number"))
-                        return (new_pop, raw["popularity"], raw.get("spotify_id"), time.time(), track["id"])
+                for track in missing_deezer:
+                    artist = track.get("artist", "")
+                    title = track.get("title", "")
+                    if not artist or not title:
+                        continue
 
-                    # Pass 1: batch lookups for tracks with known Spotify IDs (50 per request)
-                    BATCH_SIZE = 50
-                    topup_delay = SPOTIFY_DELAY
-                    for i in range(0, len(have_id), BATCH_SIZE):
-                        if _spotify_blocked_until and time.time() < _spotify_blocked_until:
-                            break
-                        chunk = have_id[i:i + BATCH_SIZE]
-                        ids = [t["spotify_id"] for t in chunk]
-                        batch_result = await _batch_lookup_spotify(client, ids, spotify_token)
+                    raw = await _lookup_deezer(client, artist, title)
 
-                        if isinstance(batch_result, dict) and batch_result.get("rate_limited"):
-                            retry_wait = min(batch_result.get("retry_after") or 5, 30)
-                            logger.info("Popularity: Spotify batch 429 — waiting %ds before retry", retry_wait)
-                            await asyncio.sleep(retry_wait)
-                            batch_result = await _batch_lookup_spotify(client, ids, spotify_token)
-                            if isinstance(batch_result, dict) and batch_result.get("rate_limited"):
-                                cooldown = min(batch_result.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS, SPOTIFY_MAX_COOLDOWN)
-                                logger.warning("Popularity: Spotify batch still rate-limited — cooldown %ds", cooldown)
-                                _set_spotify_cooldown(cooldown)
-                                spotify_token = None
-                                break
-                            topup_delay = SPOTIFY_SLOWDOWN_DELAY
-                            logger.info("Popularity: Spotify batch recovered — slowing to %.1fs delay", topup_delay)
-
-                        await asyncio.sleep(topup_delay)
-
-                        if not batch_result:
-                            continue
-
-                        for track in chunk:
-                            raw = batch_result.get(track["spotify_id"])
-                            if raw:
-                                topup_pending.append(_topup_row(track, raw))
-                                spotify_topup += 1
-                            else:
-                                not_found_ids.append(track["id"])  # ID no longer on Spotify
-
-                        if len(topup_pending) >= WRITE_BATCH:
-                            with db.get_db() as conn:
-                                db.update_spotify_popularity(conn, topup_pending)
-                            topup_pending.clear()
-
-                    # Pass 2: individual searches for tracks without a Spotify ID
-                    search_delay = topup_delay  # inherit slowdown from batch pass
-                    for track in need_search:
-                        if not spotify_token or (_spotify_blocked_until and time.time() < _spotify_blocked_until):
-                            break
-
-                        artist = track.get("artist", "")
-                        title = track.get("title", "")
-                        if not artist or not title:
-                            continue
-
-                        raw = await _lookup_spotify(client, artist, title, spotify_token)
-
+                    if raw and raw.get("rate_limited"):
+                        logger.info("Popularity: Deezer top-up rate limited — waiting 5s before retry")
+                        await asyncio.sleep(5)
+                        raw = await _lookup_deezer(client, artist, title)
                         if raw and raw.get("rate_limited"):
-                            retry_wait = min(raw.get("retry_after") or 5, 30)
-                            logger.info("Popularity: Spotify search top-up 429 — waiting %ds before retry", retry_wait)
-                            await asyncio.sleep(retry_wait)
-                            raw = await _lookup_spotify(client, artist, title, spotify_token)
-                            if raw and raw.get("rate_limited"):
-                                cooldown = min(raw.get("retry_after") or SPOTIFY_COOLDOWN_SECONDS, SPOTIFY_MAX_COOLDOWN)
-                                logger.warning("Popularity: Spotify still rate-limited during search top-up — cooldown %ds", cooldown)
-                                _set_spotify_cooldown(cooldown)
-                                spotify_token = None
-                                break
-                            search_delay = SPOTIFY_SLOWDOWN_DELAY
-                            logger.info("Popularity: Spotify search top-up recovered — slowing to %.1fs delay", search_delay)
+                            logger.warning("Popularity: Deezer still rate limited during top-up — slowing down")
+                            topup_delay = DEEZER_SLOWDOWN_DELAY
+                        else:
+                            topup_delay = DEEZER_SLOWDOWN_DELAY
 
-                        await asyncio.sleep(search_delay)
+                    await asyncio.sleep(topup_delay)
 
-                        if raw is None:
-                            continue  # network/API error — retry next batch, don't mark
+                    if raw is None:
+                        continue  # network/API error — retry next batch, don't mark
 
-                        if raw.get("not_found"):
-                            not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
-                            continue
+                    if raw.get("not_found"):
+                        not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
+                        continue
 
-                        topup_pending.append(_topup_row(track, raw))
-                        spotify_topup += 1
+                    # Reblend with existing Last.fm data
+                    lastfm_result = None
+                    if track.get("lastfm_listeners") is not None:
+                        lastfm_result = {
+                            "listeners": track["lastfm_listeners"],
+                            "playcount": track.get("lastfm_playcount"),
+                        }
 
-                        if len(topup_pending) >= WRITE_BATCH:
-                            with db.get_db() as conn:
-                                db.update_spotify_popularity(conn, topup_pending)
-                            topup_pending.clear()
+                    new_popularity = _blend_scores(raw, lastfm_result, track.get("track_number"))
+                    topup_pending.append((
+                        new_popularity, raw["rank"], raw.get("deezer_id"), time.time(), track["id"]
+                    ))
+                    deezer_topup += 1
 
-                    if not_found_ids:
+                    if len(topup_pending) >= WRITE_BATCH:
                         with db.get_db() as conn:
-                            db.update_spotify_not_found(conn, not_found_ids)
+                            db.update_deezer_popularity(conn, topup_pending)
+                        topup_pending.clear()
 
-                    if topup_pending:
-                        with db.get_db() as conn:
-                            db.update_spotify_popularity(conn, topup_pending)
+                if not_found_ids:
+                    with db.get_db() as conn:
+                        db.update_deezer_not_found(conn, not_found_ids)
 
-                    logger.info("Popularity: Spotify top-up done — %d tracks updated", spotify_topup)
+                if topup_pending:
+                    with db.get_db() as conn:
+                        db.update_deezer_popularity(conn, topup_pending)
+
+                logger.info("Popularity: Deezer top-up done — %d tracks updated", deezer_topup)
 
             # --- Last.fm top-up pass ---
             # Fill in tracks that are missing Last.fm data (e.g. enriched when Last.fm was down,
-            # or newly added tracks that got Spotify data but no Last.fm yet).
+            # or newly added tracks that got Deezer data but no Last.fm yet).
             lastfm_topup = 0
             if has_lastfm:
                 with db.get_db() as conn:
@@ -808,18 +477,12 @@ async def enrich_popularity(batch_size: int = 500):
                             continue
 
                         lastfm_result = raw_lfm
-                        # Reblend with existing Spotify/MB data already stored in DB
-                        spotify_result = None
-                        if track.get("spotify_popularity") is not None:
-                            spotify_result = {"popularity": track["spotify_popularity"]}
-                        mb_result = None
-                        if track.get("mb_rating") is not None:
-                            mb_result = {
-                                "mb_rating": track["mb_rating"],
-                                "mb_rating_count": track.get("mb_rating_count", 0),
-                            }
+                        # Reblend with existing Deezer data already stored in DB
+                        deezer_result = None
+                        if track.get("deezer_rank") is not None:
+                            deezer_result = {"rank": track["deezer_rank"]}
 
-                        new_popularity = _blend_scores(spotify_result, lastfm_result, mb_result, track.get("track_number"))
+                        new_popularity = _blend_scores(deezer_result, lastfm_result, track.get("track_number"))
                         lastfm_topup_pending.append((
                             new_popularity,
                             lastfm_result.get("listeners"),
@@ -847,20 +510,20 @@ async def enrich_popularity(batch_size: int = 500):
         # Check remaining
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
-            missing_spotify = db.count_tracks_missing_spotify(conn)
-            missing_lastfm = db.count_tracks_missing_lastfm(conn)
+            missing_deezer_count = db.count_tracks_missing_deezer(conn)
+            missing_lastfm_count = db.count_tracks_missing_lastfm(conn)
 
         logger.info(
             "Popularity enrichment done: %d enriched, %d skipped, %d remaining, "
-            "%d missing Spotify, %d missing Last.fm",
-            enriched, skipped, remaining, missing_spotify, missing_lastfm
+            "%d missing Deezer, %d missing Last.fm",
+            enriched, skipped, remaining, missing_deezer_count, missing_lastfm_count
         )
         return {
             "enriched": enriched,
             "skipped": skipped,
             "total_remaining": remaining,
-            "missing_spotify": missing_spotify,
-            "missing_lastfm": missing_lastfm,
+            "missing_deezer": missing_deezer_count,
+            "missing_lastfm": missing_lastfm_count,
         }
     finally:
         _enrichment_lock.release()

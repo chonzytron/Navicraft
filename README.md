@@ -11,7 +11,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
    Click the ♪ logo at any time to trigger a manual rescan.
 
 2. ENRICH (background)
-   Query Spotify + Last.fm + MusicBrainz for each track → popularity scores (0–100)
+   Query Deezer + Last.fm for each track → popularity scores (0–100)
    Higher scores = well-known, beloved tracks
    Runs automatically every 2 minutes until all tracks are enriched.
 
@@ -31,7 +31,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 ## Features
 
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
-- **Popularity-aware** — Uses Spotify streaming data, Last.fm listener counts, and MusicBrainz ratings so playlists favour well-known tracks over deep cuts
+- **Popularity-aware** — Uses Deezer track rank and Last.fm listener counts so playlists favour well-known tracks over deep cuts (Deezer requires no API key)
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
 - **Artist diversity** — Candidates are capped at 30% of requested song count per artist (min 3) so one artist never dominates; cap is skipped when specific artists are requested
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
@@ -93,8 +93,6 @@ The script always pulls the latest image, prunes old layers, and restarts the co
 | `GEMINI_API_KEY` | — | Google AI API key |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model identifier |
 | `LASTFM_API_KEY` | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
-| `SPOTIFY_CLIENT_ID` | — | Spotify app client ID ([free](https://developer.spotify.com/dashboard)) — best popularity signal |
-| `SPOTIFY_CLIENT_SECRET` | — | Spotify app client secret |
 | `SCAN_INTERVAL_HOURS` | `6` | Background scan interval |
 | `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc` | File types to index |
 | `MAX_CANDIDATES` | `500` | Max songs passed to AI Pass 2 |
@@ -112,16 +110,15 @@ The script always pulls the latest image, prunes old layers, and restarts the co
 
 ## Popularity Enrichment
 
-NaviCraft scores each track 0–100 using up to four sources, blended by confidence:
+NaviCraft scores each track 0–100 using up to three sources, blended by confidence:
 
 | Source | Signal | Notes |
 |--------|--------|-------|
-| **Spotify** | Real streaming popularity (0–100) | Best signal; requires free app credentials |
+| **Deezer** | Track rank (0–1M) mapped to 0–100 | Best signal; free, no API key needed |
 | **Last.fm** | Listener count + scrobble ratio | Good; free API key |
-| **MusicBrainz** | Community ratings + release count | Fallback; no key needed |
 | **Track position** | Album position heuristic | +5 for tracks 1–2, +3 for 3–4 |
 
-MusicBrainz is only queried when Spotify and Last.fm lack signal, keeping enrichment fast. Spotify backs off automatically on rate limits (10-minute cooldown after 3 consecutive 429s).
+Deezer is always available with no configuration needed (50 requests per 5 seconds). Last.fm is optional but improves accuracy.
 
 ## Metadata Extracted
 
@@ -147,7 +144,7 @@ navicraft/
 │   ├── ai_engine.py     # Two-pass AI (Claude / Gemini)
 │   ├── navidrome.py     # Subsonic API client
 │   ├── plex.py          # Plex HTTP API client
-│   ├── popularity.py    # Spotify + Last.fm + MusicBrainz enrichment
+│   ├── popularity.py    # Deezer + Last.fm enrichment
 │   ├── scheduler.py     # Background scan + enrichment jobs
 │   └── requirements.txt
 ├── frontend/
@@ -205,7 +202,7 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 ## Tips
 
 - **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer.
-- **Set up Spotify + Last.fm.** Both offer free credentials and together give the best popularity signal.
+- **Deezer works out of the box.** No API key needed. Add a Last.fm key for even better popularity data.
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
 - **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
 - **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).

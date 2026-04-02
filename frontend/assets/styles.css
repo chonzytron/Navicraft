@@ -107,8 +107,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .enrich-label{width:42px;text-align:right;flex-shrink:0}
 .enrich-track{flex:1;background:var(--surface-3);border-radius:2px;height:3px;min-width:0}
 .enrich-fill{height:3px;border-radius:2px;transition:width .5s;width:0%}
+.enrich-fill.deezer{background:var(--green)}
 .enrich-fill.lastfm{background:var(--accent)}
-.enrich-fill.spotify{background:var(--green)}
 .enrich-pct{width:38px;text-align:right;flex-shrink:0}
 
 /* --- Media server status --- */

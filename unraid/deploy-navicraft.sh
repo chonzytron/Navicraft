@@ -52,10 +52,8 @@ CLAUDE_MODEL="claude-3-5-sonnet-20241022"
 GEMINI_API_KEY=""
 GEMINI_MODEL="gemini-2.5-flash"
 
-# Spotify API (optional — best popularity data, no subscription needed)
-# Create a free app at https://developer.spotify.com/dashboard
-SPOTIFY_CLIENT_ID=""
-SPOTIFY_CLIENT_SECRET=""
+# Deezer API — no configuration needed (free, no API key required)
+# Popularity data is fetched from Deezer automatically.
 
 # Last.fm API key (optional — improves popularity scoring)
 # Get a free key at https://www.last.fm/api/account/create
@@ -135,8 +133,6 @@ docker run -d \
     -e "CLAUDE_MODEL=$CLAUDE_MODEL" \
     -e "GEMINI_API_KEY=$GEMINI_API_KEY" \
     -e "GEMINI_MODEL=$GEMINI_MODEL" \
-    -e "SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID" \
-    -e "SPOTIFY_CLIENT_SECRET=$SPOTIFY_CLIENT_SECRET" \
     -e "LASTFM_API_KEY=$LASTFM_API_KEY" \
     -e "SCAN_INTERVAL_HOURS=$SCAN_INTERVAL_HOURS" \
     -e "SCAN_EXTENSIONS=.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc" \

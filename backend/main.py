@@ -22,6 +22,7 @@ import plex
 import ai_engine
 import scheduler as sched
 import popularity
+import mood_scanner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -182,6 +183,25 @@ async def update_config(body: dict):
             body["scan_interval_hours"] = str(val)
         except (ValueError, TypeError):
             raise HTTPException(400, detail="scan_interval_hours must be 1–168")
+    if "mood_scan_enabled" in body:
+        if body["mood_scan_enabled"] not in ("true", "false", True, False):
+            raise HTTPException(400, detail="mood_scan_enabled must be 'true' or 'false'")
+    if "mood_scan_batch_size" in body:
+        try:
+            val = int(body["mood_scan_batch_size"])
+            if val < 1 or val > 500:
+                raise ValueError
+            body["mood_scan_batch_size"] = str(val)
+        except (ValueError, TypeError):
+            raise HTTPException(400, detail="mood_scan_batch_size must be 1–500")
+    if "mood_scan_interval_hours" in body:
+        try:
+            val = int(body["mood_scan_interval_hours"])
+            if val < 1 or val > 168:
+                raise ValueError
+            body["mood_scan_interval_hours"] = str(val)
+        except (ValueError, TypeError):
+            raise HTTPException(400, detail="mood_scan_interval_hours must be 1–168")
     config.update_from_dict(body)
     return {"status": "ok", "config": config.get_editable()}
 
@@ -210,11 +230,15 @@ async def library_stats():
         moods = db.get_moods(conn)
         year_range = db.get_year_range(conn)
         last_scan = db.get_last_scan(conn)
+        mood_tag_summary = db.get_mood_tag_summary(conn)
+        theme_tag_summary = db.get_theme_tag_summary(conn)
 
     return {
         **stats,
         "genres": genres,
         "moods": moods,
+        "mood_tags": mood_tag_summary,
+        "theme_tags": theme_tag_summary,
         "year_range": year_range,
         "last_scan": last_scan,
     }
@@ -304,6 +328,65 @@ async def popularity_status():
 
 
 # =========================================================================
+# Mood / Theme Tag Scanning
+# =========================================================================
+
+@app.post("/api/mood/scan")
+async def trigger_mood_scan():
+    """Manually trigger a mood/theme tag scan batch."""
+    if not config.mood_scan_enabled:
+        raise HTTPException(400, detail="Mood scanning is disabled. Enable it in Settings.")
+
+    progress = mood_scanner.get_progress()
+    if progress.get("running"):
+        return {"status": "already_running", "message": "Mood scan is already in progress"}
+
+    with db.get_db() as conn:
+        remaining = db.count_tracks_without_mood_scan(conn)
+    if remaining == 0:
+        return {"status": "complete", "message": "All tracks already scanned"}
+
+    async def run():
+        await mood_scanner.scan_mood_tags(batch_size=config.mood_scan_batch_size)
+
+    asyncio.create_task(run())
+    return {"status": "started", "remaining": remaining}
+
+
+@app.get("/api/mood/status")
+async def mood_scan_status():
+    """Get mood scan progress and coverage stats."""
+    with db.get_db() as conn:
+        total = db.execute_count(conn, "SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL")
+        remaining = db.count_tracks_without_mood_scan(conn)
+        tagged = db.count_tracks_with_mood_tags(conn)
+    scanned = total - remaining
+    progress = mood_scanner.get_progress()
+    return {
+        "total": total,
+        "scanned": scanned,
+        "remaining": remaining,
+        "tagged": tagged,
+        "percent": round(scanned / total * 100, 1) if total > 0 else 0,
+        "running": progress.get("running", False),
+        "message": progress.get("message", ""),
+        "batch_current": progress.get("current", 0),
+        "batch_total": progress.get("total", 0),
+    }
+
+
+@app.post("/api/mood/reset")
+async def reset_mood_tags():
+    """Reset all mood/theme tags so they can be re-scanned."""
+    count = await mood_scanner.reset_mood_tags()
+    return {
+        "status": "reset",
+        "tracks_to_scan": count,
+        "message": "Mood/theme tags reset. Background scanning will re-process all tracks.",
+    }
+
+
+# =========================================================================
 # Scanning
 # =========================================================================
 
@@ -388,6 +471,8 @@ async def generate_playlist(req: GenerateRequest):
                     "album_count": stats["album_count"],
                     "genres": [g["genre"] for g in db.get_genres(conn)],
                     "moods": db.get_moods(conn),
+                    "mood_tags": db.get_mood_tag_summary(conn),
+                    "theme_tags": db.get_theme_tag_summary(conn),
                     "top_artists": db.get_top_artists(conn, limit=150),
                     "year_range": db.get_year_range(conn),
                 }

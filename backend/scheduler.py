@@ -3,14 +3,18 @@ Background scheduler for periodic library scans and popularity enrichment.
 Uses APScheduler with asyncio integration.
 """
 
+import asyncio
 import logging
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger
 from config import config
 import scanner
 import navidrome
 import plex
 import popularity
+import mood_scanner
 import database as db
 
 logger = logging.getLogger(__name__)
@@ -69,6 +73,54 @@ async def _scheduled_enrichment():
         logger.exception("Scheduled enrichment failed")
 
 
+async def _scheduled_mood_scan():
+    """Process X tracks for mood/theme tags, then schedule the next run Y hours later.
+
+    Uses a one-shot DateTrigger instead of IntervalTrigger so the Y-hour wait
+    starts *after* the batch finishes, not from when it was scheduled.
+    """
+    if not config.mood_scan_enabled:
+        _reschedule_mood_scan()
+        return
+    try:
+        with db.get_db() as conn:
+            remaining = db.count_tracks_without_mood_scan(conn)
+        if remaining == 0:
+            logger.info("Mood scan: all tracks already scanned")
+            _reschedule_mood_scan()
+            return
+
+        logger.info("Mood scan job: %d tracks remaining, processing %d",
+                     remaining, config.mood_scan_batch_size)
+        result = await mood_scanner.scan_mood_tags(batch_size=config.mood_scan_batch_size)
+        logger.info("Mood scan job done: %s", result)
+    except Exception:
+        logger.exception("Scheduled mood scan failed")
+    finally:
+        # Always reschedule — Y hours from NOW (after batch completed)
+        _reschedule_mood_scan()
+
+
+def _reschedule_mood_scan():
+    """Schedule the next mood scan run Y hours from now."""
+    global _scheduler
+    if not _scheduler or not _scheduler.running:
+        return
+    next_run = datetime.now() + timedelta(hours=config.mood_scan_interval_hours)
+    try:
+        _scheduler.add_job(
+            _scheduled_mood_scan,
+            trigger=DateTrigger(run_date=next_run),
+            id="mood_scan",
+            name="Mood tag scan",
+            replace_existing=True,
+        )
+        logger.info("Mood scan: next run scheduled at %s (%dh from now)",
+                     next_run.strftime("%H:%M"), config.mood_scan_interval_hours)
+    except Exception:
+        logger.exception("Failed to reschedule mood scan")
+
+
 def start_scheduler():
     """Start the background scheduler."""
     global _scheduler
@@ -94,10 +146,25 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # Mood / theme tag scanning — process X tracks, then wait Y hours, repeat.
+    # First run triggers immediately; subsequent runs scheduled Y hours after
+    # each batch completes (not Y hours from schedule start).
+    if config.mood_scan_enabled:
+        _scheduler.add_job(
+            _scheduled_mood_scan,
+            trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=30)),
+            id="mood_scan",
+            name="Mood tag scan",
+            replace_existing=True,
+        )
+
     _scheduler.start()
     logger.info(
-        "Scheduler started: scanning every %dh, enrichment every 2m",
+        "Scheduler started: scanning every %dh, enrichment every 2m, mood scan %s (%d tracks every %dh)",
         config.scan_interval_hours,
+        "enabled" if config.mood_scan_enabled else "disabled",
+        config.mood_scan_batch_size,
+        config.mood_scan_interval_hours,
     )
 
 

@@ -2,9 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies + curl for health check
+# Install system dependencies: curl for health check, libs for essentia audio analysis
 COPY backend/requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl libfftw3-3 libavcodec60 libavformat60 libavutil58 \
+        libswresample4 libsamplerate0 libyaml-0-2 libtag1v5 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt
 

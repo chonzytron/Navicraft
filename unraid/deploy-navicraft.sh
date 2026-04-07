@@ -26,41 +26,14 @@ WEB_PORT="8085"
 # Path to your music library (same as Navidrome)
 MUSIC_PATH="/mnt/user/media/music"
 
-# Path for NaviCraft persistent data (SQLite DB)
+# Path for NaviCraft persistent data (SQLite DB + config)
 APPDATA_PATH="/mnt/user/appdata/navicraft"
 
-# Navidrome connection (optional if using Plex)
-# If Navidrome runs in bridge mode, use your Unraid IP (e.g., http://192.168.1.100:4533)
-# If using a custom Docker network, you can use the container name (e.g., http://navidrome:4533)
-NAVIDROME_URL="http://192.168.1.100:4533"
-NAVIDROME_USER="admin"
-NAVIDROME_PASSWORD="your_password_here"
+# Scanner file extensions (which audio formats to index)
+SCAN_EXTENSIONS=".mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc"
 
-# Plex / Plexamp connection (optional if using Navidrome)
-# Get your token: https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/
-PLEX_URL=""
-PLEX_TOKEN=""
-
-# AI Provider: "claude" or "gemini"
-AI_PROVIDER="claude"
-
-# Claude (Anthropic) — required if AI_PROVIDER=claude
-CLAUDE_API_KEY=""
-CLAUDE_MODEL="claude-3-5-sonnet-20241022"
-
-# Gemini (Google) — required if AI_PROVIDER=gemini
-GEMINI_API_KEY=""
-GEMINI_MODEL="gemini-2.5-flash"
-
-# Deezer API — no configuration needed (free, no API key required)
-# Popularity data is fetched from Deezer automatically.
-
-# Last.fm API key (optional — improves popularity scoring)
-# Get a free key at https://www.last.fm/api/account/create
-LASTFM_API_KEY=""
-
-# Scanner settings
-SCAN_INTERVAL_HOURS="6"
+# Max candidate tracks sent to AI Pass 2
+MAX_CANDIDATES="500"
 
 # Docker image (use ghcr.io for pre-built, or build locally)
 DOCKER_IMAGE="ghcr.io/chonzytron/navicraft:latest"
@@ -68,6 +41,29 @@ DOCKER_IMAGE="ghcr.io/chonzytron/navicraft:latest"
 # Set to "true" to build from source instead of pulling the image
 BUILD_FROM_SOURCE="false"
 SOURCE_PATH="/mnt/user/appdata/navicraft/source"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: Navidrome, Plex, AI provider/keys/models, Last.fm API key, and
+# scan interval are now configurable from the Settings gear icon in the
+# web UI. Those settings persist in /data/navicraft_config.json.
+#
+# You can still pass them as env vars below for initial bootstrap or
+# headless deployments. Env vars act as defaults — UI settings override them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Uncomment and set any of these to pre-configure via env vars:
+# NAVIDROME_URL="http://192.168.1.100:4533"
+# NAVIDROME_USER="admin"
+# NAVIDROME_PASSWORD="your_password_here"
+# PLEX_URL=""
+# PLEX_TOKEN=""
+# AI_PROVIDER="claude"
+# CLAUDE_API_KEY=""
+# CLAUDE_MODEL="claude-3-5-sonnet-20241022"
+# GEMINI_API_KEY=""
+# GEMINI_MODEL="gemini-2.5-flash"
+# LASTFM_API_KEY=""
+# SCAN_INTERVAL_HOURS="6"
 
 # =============================================================================
 # DEPLOYMENT — No need to edit below this line
@@ -112,8 +108,25 @@ echo "  Image:    $DOCKER_IMAGE"
 echo "  Port:     $WEB_PORT"
 echo "  Music:    $MUSIC_PATH"
 echo "  Data:     $APPDATA_PATH"
-echo "  AI:       $AI_PROVIDER"
 echo ""
+echo "  Configure Navidrome, Plex, AI keys, etc. via the"
+echo "  Settings gear icon in the web UI after first launch."
+echo ""
+
+# Build optional env var flags (only passed if the variable is set)
+OPTIONAL_ENVS=()
+[ -n "${NAVIDROME_URL:-}" ]        && OPTIONAL_ENVS+=(-e "NAVIDROME_URL=$NAVIDROME_URL")
+[ -n "${NAVIDROME_USER:-}" ]       && OPTIONAL_ENVS+=(-e "NAVIDROME_USER=$NAVIDROME_USER")
+[ -n "${NAVIDROME_PASSWORD:-}" ]   && OPTIONAL_ENVS+=(-e "NAVIDROME_PASSWORD=$NAVIDROME_PASSWORD")
+[ -n "${PLEX_URL:-}" ]             && OPTIONAL_ENVS+=(-e "PLEX_URL=$PLEX_URL")
+[ -n "${PLEX_TOKEN:-}" ]           && OPTIONAL_ENVS+=(-e "PLEX_TOKEN=$PLEX_TOKEN")
+[ -n "${AI_PROVIDER:-}" ]          && OPTIONAL_ENVS+=(-e "AI_PROVIDER=$AI_PROVIDER")
+[ -n "${CLAUDE_API_KEY:-}" ]       && OPTIONAL_ENVS+=(-e "CLAUDE_API_KEY=$CLAUDE_API_KEY")
+[ -n "${CLAUDE_MODEL:-}" ]         && OPTIONAL_ENVS+=(-e "CLAUDE_MODEL=$CLAUDE_MODEL")
+[ -n "${GEMINI_API_KEY:-}" ]       && OPTIONAL_ENVS+=(-e "GEMINI_API_KEY=$GEMINI_API_KEY")
+[ -n "${GEMINI_MODEL:-}" ]         && OPTIONAL_ENVS+=(-e "GEMINI_MODEL=$GEMINI_MODEL")
+[ -n "${LASTFM_API_KEY:-}" ]       && OPTIONAL_ENVS+=(-e "LASTFM_API_KEY=$LASTFM_API_KEY")
+[ -n "${SCAN_INTERVAL_HOURS:-}" ]  && OPTIONAL_ENVS+=(-e "SCAN_INTERVAL_HOURS=$SCAN_INTERVAL_HOURS")
 
 docker run -d \
     --name="$CONTAINER_NAME" \
@@ -123,20 +136,9 @@ docker run -d \
     -v "$APPDATA_PATH:/data:rw" \
     -e "MUSIC_DIR=/music" \
     -e "DB_PATH=/data/navicraft.db" \
-    -e "NAVIDROME_URL=$NAVIDROME_URL" \
-    -e "NAVIDROME_USER=$NAVIDROME_USER" \
-    -e "NAVIDROME_PASSWORD=$NAVIDROME_PASSWORD" \
-    -e "PLEX_URL=$PLEX_URL" \
-    -e "PLEX_TOKEN=$PLEX_TOKEN" \
-    -e "AI_PROVIDER=$AI_PROVIDER" \
-    -e "CLAUDE_API_KEY=$CLAUDE_API_KEY" \
-    -e "CLAUDE_MODEL=$CLAUDE_MODEL" \
-    -e "GEMINI_API_KEY=$GEMINI_API_KEY" \
-    -e "GEMINI_MODEL=$GEMINI_MODEL" \
-    -e "LASTFM_API_KEY=$LASTFM_API_KEY" \
-    -e "SCAN_INTERVAL_HOURS=$SCAN_INTERVAL_HOURS" \
-    -e "SCAN_EXTENSIONS=.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc" \
-    -e "MAX_CANDIDATES=500" \
+    -e "SCAN_EXTENSIONS=$SCAN_EXTENSIONS" \
+    -e "MAX_CANDIDATES=$MAX_CANDIDATES" \
+    "${OPTIONAL_ENVS[@]}" \
     "$DOCKER_IMAGE"
 
 echo ""

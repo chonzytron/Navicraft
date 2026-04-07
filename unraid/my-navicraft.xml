@@ -11,7 +11,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/chonzytron/navicraft/issues</Support>
   <Project>https://github.com/chonzytron/navicraft</Project>
-  <Overview>NaviCraft is an AI-powered playlist generator for Navidrome and Plex/Plexamp. It scans your local music library, builds a metadata index, and uses AI (Claude or Gemini) to generate playlists from free-form text prompts like "chill jazz for a rainy evening" or "high energy workout mix". Supports both Navidrome and Plex as playlist targets — configure one or both.</Overview>
+  <Overview>NaviCraft is an AI-powered playlist generator for Navidrome and Plex/Plexamp. It scans your local music library, builds a metadata index, and uses AI (Claude or Gemini) to generate playlists from free-form text prompts like "chill jazz for a rainy evening" or "high energy workout mix". Supports both Navidrome and Plex as playlist targets — configure one or both. Most settings (servers, AI keys, etc.) can be configured from the Settings gear icon in the web UI after first launch.</Overview>
   <Category>MediaApp:Music</Category>
   <Icon>https://raw.githubusercontent.com/chonzytron/navicraft/main/frontend/assets/icon.png</Icon>
   <Description>NaviCraft - AI-powered playlist generator for Navidrome and Plex/Plexamp. Scans your music library and uses AI to create playlists from natural language prompts.</Description>
@@ -57,45 +57,52 @@
     Required="true"
     Mask="false">/mnt/user/appdata/navicraft</Config>
 
-  <!-- Navidrome Connection (optional if using Plex) -->
+  <!-- =================================================================== -->
+  <!-- UI-configurable settings (optional env var overrides)               -->
+  <!-- These can all be configured from the Settings gear icon in the      -->
+  <!-- web UI. Values set here act as initial defaults; UI settings         -->
+  <!-- saved to /data/navicraft_config.json take precedence.               -->
+  <!-- =================================================================== -->
+
+  <!-- Navidrome Connection (optional — configurable in UI) -->
   <Config
     Name="Navidrome URL"
     Target="NAVIDROME_URL"
-    Default="http://navidrome:4533"
-    Description="URL to your Navidrome instance. Use container name if on same Docker network, or http://[UNRAID_IP]:4533 for bridge mode. Leave empty if using Plex only."
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Use container name if on same Docker network, or http://[UNRAID_IP]:4533 for bridge mode."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
-    Mask="false">http://navidrome:4533</Config>
+    Mask="false"></Config>
 
   <Config
     Name="Navidrome User"
     Target="NAVIDROME_USER"
-    Default="admin"
-    Description="Navidrome admin username"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
-    Mask="false">admin</Config>
+    Mask="false"></Config>
 
   <Config
     Name="Navidrome Password"
     Target="NAVIDROME_PASSWORD"
     Default=""
-    Description="Navidrome admin password"
+    Description="Optional initial default. Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="true"></Config>
 
-  <!-- Plex / Plexamp Connection (optional if using Navidrome) -->
+  <!-- Plex / Plexamp Connection (optional — configurable in UI) -->
   <Config
     Name="Plex URL"
     Target="PLEX_URL"
     Default=""
-    Description="URL to your Plex server (e.g., http://192.168.1.100:32400). Leave empty if using Navidrome only."
+    Description="Optional initial default. Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="false"></Config>
 
@@ -103,87 +110,87 @@
     Name="Plex Token"
     Target="PLEX_TOKEN"
     Default=""
-    Description="Plex authentication token. See https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/"
+    Description="Optional initial default. Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="true"></Config>
 
-  <!-- AI Provider -->
+  <!-- AI Provider (configurable in UI) -->
   <Config
     Name="AI Provider"
     Target="AI_PROVIDER"
-    Default="claude"
-    Description="AI provider to use: 'claude' or 'gemini'"
+    Default=""
+    Description="Optional initial default ('claude' or 'gemini'). Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
-    Required="true"
-    Mask="false">claude</Config>
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
 
   <Config
     Name="Claude API Key"
     Target="CLAUDE_API_KEY"
     Default=""
-    Description="Anthropic API key (required if AI_PROVIDER=claude)"
+    Description="Optional initial default. Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="true"></Config>
 
   <Config
     Name="Claude Model"
     Target="CLAUDE_MODEL"
-    Default="claude-sonnet-4-20250514"
-    Description="Claude model to use"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Default: claude-3-5-sonnet-20241022"
     Type="Variable"
     Display="advanced"
     Required="false"
-    Mask="false">claude-sonnet-4-20250514</Config>
+    Mask="false"></Config>
 
   <Config
     Name="Gemini API Key"
     Target="GEMINI_API_KEY"
     Default=""
-    Description="Google Gemini API key (required if AI_PROVIDER=gemini)"
+    Description="Optional initial default. Configurable from Settings in the web UI."
     Type="Variable"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="true"></Config>
 
   <Config
     Name="Gemini Model"
     Target="GEMINI_MODEL"
-    Default="gemini-2.5-flash"
-    Description="Gemini model to use"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Default: gemini-2.5-flash"
     Type="Variable"
     Display="advanced"
     Required="false"
-    Mask="false">gemini-2.5-flash</Config>
+    Mask="false"></Config>
 
   <!-- Deezer — no configuration needed (free API, no key required) -->
   <!-- Popularity data is fetched from Deezer automatically -->
 
-  <!-- Last.fm (optional — improves popularity scoring) -->
+  <!-- Last.fm (optional — configurable in UI) -->
   <Config
     Name="Last.fm API Key"
     Target="LASTFM_API_KEY"
     Default=""
-    Description="Last.fm API key for better popularity data. Get one free at https://www.last.fm/api/account/create"
-    Type="Variable"
-    Display="always"
-    Required="false"
-    Mask="true"></Config>
-
-  <!-- Scanner Settings -->
-  <Config
-    Name="Scan Interval (hours)"
-    Target="SCAN_INTERVAL_HOURS"
-    Default="6"
-    Description="How often to automatically re-scan the music library (in hours)"
+    Description="Optional initial default. Configurable from Settings in the web UI. Get a free key at https://www.last.fm/api/account/create"
     Type="Variable"
     Display="advanced"
     Required="false"
-    Mask="false">6</Config>
+    Mask="true"></Config>
+
+  <!-- Scanner Settings (configurable in UI) -->
+  <Config
+    Name="Scan Interval (hours)"
+    Target="SCAN_INTERVAL_HOURS"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Default: 6"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
 
   <Config
     Name="Scan Extensions"

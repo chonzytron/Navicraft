@@ -43,9 +43,10 @@ BUILD_FROM_SOURCE="false"
 SOURCE_PATH="/mnt/user/appdata/navicraft/source"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTE: Navidrome, Plex, AI provider/keys/models, Last.fm API key, and
-# scan interval are now configurable from the Settings gear icon in the
-# web UI. Those settings persist in /data/navicraft_config.json.
+# NOTE: Navidrome, Plex, AI provider/keys/models, Last.fm API key,
+# scan interval, and mood/theme tagging settings are now configurable
+# from the Settings gear icon in the web UI. Those settings persist
+# in /data/navicraft_config.json.
 #
 # You can still pass them as env vars below for initial bootstrap or
 # headless deployments. Env vars act as defaults — UI settings override them.
@@ -64,6 +65,9 @@ SOURCE_PATH="/mnt/user/appdata/navicraft/source"
 # GEMINI_MODEL="gemini-2.5-flash"
 # LASTFM_API_KEY=""
 # SCAN_INTERVAL_HOURS="6"
+# MOOD_SCAN_ENABLED="false"
+# MOOD_SCAN_BATCH_SIZE="50"
+# MOOD_SCAN_INTERVAL_HOURS="24"
 
 # =============================================================================
 # DEPLOYMENT — No need to edit below this line
@@ -127,6 +131,9 @@ OPTIONAL_ENVS=()
 [ -n "${GEMINI_MODEL:-}" ]         && OPTIONAL_ENVS+=(-e "GEMINI_MODEL=$GEMINI_MODEL")
 [ -n "${LASTFM_API_KEY:-}" ]       && OPTIONAL_ENVS+=(-e "LASTFM_API_KEY=$LASTFM_API_KEY")
 [ -n "${SCAN_INTERVAL_HOURS:-}" ]  && OPTIONAL_ENVS+=(-e "SCAN_INTERVAL_HOURS=$SCAN_INTERVAL_HOURS")
+[ -n "${MOOD_SCAN_ENABLED:-}" ]   && OPTIONAL_ENVS+=(-e "MOOD_SCAN_ENABLED=$MOOD_SCAN_ENABLED")
+[ -n "${MOOD_SCAN_BATCH_SIZE:-}" ] && OPTIONAL_ENVS+=(-e "MOOD_SCAN_BATCH_SIZE=$MOOD_SCAN_BATCH_SIZE")
+[ -n "${MOOD_SCAN_INTERVAL_HOURS:-}" ] && OPTIONAL_ENVS+=(-e "MOOD_SCAN_INTERVAL_HOURS=$MOOD_SCAN_INTERVAL_HOURS")
 
 docker run -d \
     --name="$CONTAINER_NAME" \

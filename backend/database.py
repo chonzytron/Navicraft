@@ -45,7 +45,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     deezer_rank     INTEGER,
     deezer_id       TEXT,
     deezer_checked_at REAL,
-    lastfm_checked_at  REAL
+    lastfm_checked_at  REAL,
+    musicbrainz_rating INTEGER,
+    musicbrainz_rating_count INTEGER,
+    musicbrainz_checked_at REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
@@ -103,6 +106,9 @@ def _migrate(conn: sqlite3.Connection):
         ("deezer_id", "TEXT"),
         ("deezer_checked_at", "REAL"),
         ("lastfm_checked_at", "REAL"),
+        ("musicbrainz_rating", "INTEGER"),
+        ("musicbrainz_rating_count", "INTEGER"),
+        ("musicbrainz_checked_at", "REAL"),
     ]
     for col, typ in migrations:
         if col not in columns:
@@ -429,7 +435,8 @@ def get_tracks_missing_deezer(db: sqlite3.Connection, limit: int = 500) -> list[
     Tracks checked in the last 24h with no result are skipped (not found / retry tomorrow)."""
     rows = db.execute("""
         SELECT id, title, artist, track_number,
-               lastfm_listeners, lastfm_playcount
+               lastfm_listeners, lastfm_playcount,
+               musicbrainz_rating, musicbrainz_rating_count
         FROM tracks
         WHERE popularity IS NOT NULL
           AND deezer_rank IS NULL
@@ -464,10 +471,10 @@ def update_deezer_not_found(db: sqlite3.Connection, track_ids: list[int]):
 def get_tracks_missing_lastfm(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
     """Get tracks that have been enriched but are missing Last.fm data and are due for a retry.
     Tracks checked in the last 24h with no result are skipped (not found / retry tomorrow).
-    Returns existing Deezer values so the score can be reblended."""
+    Returns existing Deezer and MusicBrainz values so the score can be reblended."""
     rows = db.execute("""
         SELECT id, title, artist, track_number,
-               deezer_rank
+               deezer_rank, musicbrainz_rating, musicbrainz_rating_count
         FROM tracks
         WHERE popularity IS NOT NULL
           AND lastfm_listeners IS NULL
@@ -497,6 +504,53 @@ def update_lastfm_not_found(db: sqlite3.Connection, track_ids: list[int]):
         "UPDATE tracks SET lastfm_checked_at = ? WHERE id = ?",
         [(now, tid) for tid in track_ids],
     )
+
+
+def get_tracks_missing_musicbrainz(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
+    """Get tracks that have been enriched but are missing MusicBrainz data and are due for a retry.
+    Tracks checked in the last 24h with no result are skipped."""
+    rows = db.execute("""
+        SELECT id, title, artist, track_number,
+               deezer_rank, lastfm_listeners, lastfm_playcount
+        FROM tracks
+        WHERE popularity IS NOT NULL
+          AND musicbrainz_rating IS NULL
+          AND title IS NOT NULL
+          AND (musicbrainz_checked_at IS NULL
+               OR (unixepoch() - musicbrainz_checked_at) > 86400)
+        ORDER BY musicbrainz_checked_at ASC NULLS FIRST, id ASC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_tracks_missing_musicbrainz(db: sqlite3.Connection) -> int:
+    """Count enriched tracks that still have no MusicBrainz data and are due for a retry."""
+    row = db.execute("""
+        SELECT COUNT(*) as cnt FROM tracks
+        WHERE popularity IS NOT NULL AND musicbrainz_rating IS NULL AND title IS NOT NULL
+          AND (musicbrainz_checked_at IS NULL OR (unixepoch() - musicbrainz_checked_at) > 86400)
+    """).fetchone()
+    return row["cnt"]
+
+
+def update_musicbrainz_not_found(db: sqlite3.Connection, track_ids: list[int]):
+    """Mark tracks as checked on MusicBrainz but not found. They won't be retried for 24h."""
+    now = time.time()
+    db.executemany(
+        "UPDATE tracks SET musicbrainz_checked_at = ? WHERE id = ?",
+        [(now, tid) for tid in track_ids],
+    )
+
+
+def update_musicbrainz_popularity(db: sqlite3.Connection, rows: list[tuple]):
+    """Patch MusicBrainz + reblended popularity for tracks.
+    Each row: (popularity, musicbrainz_rating, musicbrainz_rating_count, musicbrainz_checked_at, track_id)
+    """
+    db.executemany("""
+        UPDATE tracks SET popularity = ?, musicbrainz_rating = ?, musicbrainz_rating_count = ?,
+            musicbrainz_checked_at = ? WHERE id = ?
+    """, rows)
 
 
 def update_lastfm_popularity(db: sqlite3.Connection, rows: list[tuple]):
@@ -539,7 +593,9 @@ def reset_popularity(db: sqlite3.Connection):
         UPDATE tracks SET popularity = NULL,
                lastfm_listeners = NULL, lastfm_playcount = NULL,
                deezer_rank = NULL, deezer_id = NULL,
-               deezer_checked_at = NULL, lastfm_checked_at = NULL
+               deezer_checked_at = NULL, lastfm_checked_at = NULL,
+               musicbrainz_rating = NULL, musicbrainz_rating_count = NULL,
+               musicbrainz_checked_at = NULL
     """)
     count = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL").fetchone()["cnt"]
     return count
@@ -563,14 +619,18 @@ def bulk_update_popularity(db: sqlite3.Connection, rows: list[tuple]):
     Batch-update popularity for multiple tracks in one transaction.
     Each row: (popularity, lastfm_listeners, lastfm_playcount,
                deezer_rank, deezer_id, deezer_checked_at,
-               lastfm_checked_at, track_id)
+               lastfm_checked_at, musicbrainz_rating,
+               musicbrainz_rating_count, musicbrainz_checked_at,
+               track_id)
     """
     db.executemany("""
         UPDATE tracks
         SET popularity = ?,
             lastfm_listeners = ?, lastfm_playcount = ?,
             deezer_rank = ?, deezer_id = ?,
-            deezer_checked_at = ?, lastfm_checked_at = ?
+            deezer_checked_at = ?, lastfm_checked_at = ?,
+            musicbrainz_rating = ?, musicbrainz_rating_count = ?,
+            musicbrainz_checked_at = ?
         WHERE id = ?
     """, rows)
 

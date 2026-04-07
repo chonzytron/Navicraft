@@ -280,9 +280,11 @@ async def popularity_status():
         remaining = db.count_tracks_without_popularity(conn)
         deezer_missing = db.count_tracks_missing_deezer(conn)
         lastfm_missing = db.count_tracks_missing_lastfm(conn)
+        mb_missing = db.count_tracks_missing_musicbrainz(conn)
     enriched = total - remaining
     deezer_enriched = total - deezer_missing
     lastfm_enriched = total - lastfm_missing
+    mb_enriched = total - mb_missing
     return {
         "total": total,
         "enriched": enriched,
@@ -295,6 +297,9 @@ async def popularity_status():
         "lastfm_enriched": lastfm_enriched,
         "lastfm_missing": lastfm_missing,
         "lastfm_percent": round(lastfm_enriched / total * 100, 1) if total > 0 else 0,
+        "musicbrainz_enriched": mb_enriched,
+        "musicbrainz_missing": mb_missing,
+        "musicbrainz_percent": round(mb_enriched / total * 100, 1) if total > 0 else 0,
     }
 
 

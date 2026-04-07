@@ -15,7 +15,7 @@ backend/
 ├── ai_engine.py     # Two-pass AI: intent extraction → SQLite filter → song selection
 ├── navidrome.py     # Subsonic API client (playlist CRUD + ID sync, with retry logic)
 ├── plex.py          # Plex HTTP API client (playlist CRUD + ID sync, with retry logic)
-├── popularity.py    # Multi-source enrichment: Deezer + Last.fm + track position
+├── popularity.py    # Multi-source enrichment: Deezer + Last.fm + MusicBrainz + track position
 ├── scheduler.py     # APScheduler for periodic scans (configurable, default 6h) and enrichment (2m)
 └── requirements.txt
 
@@ -45,9 +45,10 @@ unraid/
   - Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates; skipped when specific artists are requested
   - Pass 2: prompt + candidate list → final ordered playlist
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts
-- **Popularity scoring**: Multi-source enrichment (Deezer rank, Last.fm listeners/playcount, track position heuristic). Confidence-weighted blending. Deezer is free with no auth needed (50 req/5s rate limit).
+- **Popularity scoring**: Multi-source enrichment (Deezer rank, Last.fm listeners/playcount, MusicBrainz community ratings, track position heuristic). Confidence-weighted blending. Deezer and MusicBrainz are free with no auth needed.
 - **Deezer rate limiting**: On 429 or quota error, waits 5s and retries. After recovery, slows to 0.5s delay for the rest of the batch.
-- **Deezer top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `deezer_rank IS NULL` are retroactively enriched using stored Last.fm values for reblending.
+- **Deezer top-up pass**: After each enrichment batch, tracks with `popularity IS NOT NULL` but `deezer_rank IS NULL` are retroactively enriched using stored Last.fm/MusicBrainz values for reblending.
+- **MusicBrainz integration**: Community ratings (0-5 scale, converted to 0-100) with vote count as confidence weight. Free API, no auth needed, strict 1 req/sec rate limit. Has its own top-up pass like Deezer and Last.fm.
 - **Enrichment lock**: `asyncio.Lock` in `popularity.py` prevents concurrent enrichment runs (startup scan, post-scan trigger, and scheduler all call `enrich_popularity`).
 - **SSE streaming** on `/api/generate` for real-time progress feedback. Includes `X-Accel-Buffering: no` and `Cache-Control: no-cache` headers to prevent Nginx proxy buffering.
 - **Rate limiting**: 10s cooldown on `/api/generate` to prevent double-clicks
@@ -142,6 +143,7 @@ docker compose up -d --build
 | Scan job interval | `6 hours` (configurable) | scheduler.py / config.py |
 | Deezer delay | `0.1s` (10 req/s), `0.5s` after rate limit recovery | popularity.py |
 | Last.fm delay | `0.25s` (4 req/s) | popularity.py |
+| MusicBrainz delay | `1.1s` (strict 1 req/s) | popularity.py |
 | Default songs in UI | `30` | frontend/index.html |
 | Default duration in UI | `90 min` | frontend/index.html |
 
@@ -156,7 +158,7 @@ docker compose up -d --build
 - **Mode toggle** — Songs (count) or Duration (minutes), one input visible at a time; number inputs have no spinners, clamp to 1–999
 - **Preview toggle** — when ON, shows results before saving; when OFF, auto-saves to selected media server on generation
 - **SSE progress display** — real-time phase labels and elapsed timer during generation
-- **Enrichment progress bar** — shown while background enrichment is running
+- **Enrichment progress bars** — per-source (Deezer, Last.fm, MusicBrainz) progress shown while background enrichment is running
 - **Export** — Save to Navidrome/Plex or download as .m3u
 
 ## Testing Notes

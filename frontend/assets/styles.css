@@ -113,6 +113,7 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .enrich-fill{height:3px;border-radius:2px;transition:width .5s;width:0%}
 .enrich-fill.deezer{background:var(--green)}
 .enrich-fill.lastfm{background:var(--accent)}
+.enrich-fill.musicbrainz{background:#ba478f}
 .enrich-pct{width:38px;text-align:right;flex-shrink:0}
 
 /* --- Media server status --- */

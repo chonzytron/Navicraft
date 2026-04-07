@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     lastfm_checked_at  REAL,
     musicbrainz_rating INTEGER,
     musicbrainz_rating_count INTEGER,
-    musicbrainz_checked_at REAL
+    musicbrainz_checked_at REAL,
+    mood_tags        TEXT,
+    theme_tags       TEXT,
+    essentia_scanned_at REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
@@ -109,6 +112,9 @@ def _migrate(conn: sqlite3.Connection):
         ("musicbrainz_rating", "INTEGER"),
         ("musicbrainz_rating_count", "INTEGER"),
         ("musicbrainz_checked_at", "REAL"),
+        ("mood_tags", "TEXT"),
+        ("theme_tags", "TEXT"),
+        ("essentia_scanned_at", "REAL"),
     ]
     for col, typ in migrations:
         if col not in columns:
@@ -301,9 +307,13 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
 
     if filters.get("moods"):
         moods = filters["moods"]
-        mood_clauses = " OR ".join("LOWER(mood) LIKE ?" for _ in moods)
+        mood_clauses = " OR ".join(
+            "(LOWER(mood) LIKE ? OR LOWER(mood_tags) LIKE ? OR LOWER(theme_tags) LIKE ?)"
+            for _ in moods
+        )
         conditions.append(f"({mood_clauses})")
-        params.extend(f"%{m.lower()}%" for m in moods)
+        for m in moods:
+            params.extend([f"%{m.lower()}%", f"%{m.lower()}%", f"%{m.lower()}%"])
 
     if filters.get("bpm_min"):
         conditions.append("bpm >= ?")
@@ -338,7 +348,7 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
     rows = db.execute(f"""
         SELECT id, title, artist, album_artist, album, genre, year,
                duration, bpm, composer, mood, navidrome_id, plex_id, file_path,
-               popularity
+               popularity, mood_tags, theme_tags
         FROM tracks
         WHERE {where}
         ORDER BY (COALESCE(popularity, 50) + ABS(RANDOM()) % 20) DESC
@@ -633,6 +643,86 @@ def bulk_update_popularity(db: sqlite3.Connection, rows: list[tuple]):
             musicbrainz_checked_at = ?
         WHERE id = ?
     """, rows)
+
+
+# --- Mood / Theme Tags ---
+
+def get_tracks_without_mood_scan(db: sqlite3.Connection, limit: int = 100) -> list[dict]:
+    """Get tracks that haven't been scanned for mood/theme tags yet."""
+    rows = db.execute("""
+        SELECT id, title, artist, album, file_path, mood
+        FROM tracks
+        WHERE essentia_scanned_at IS NULL AND title IS NOT NULL
+        ORDER BY id
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_tracks_without_mood_scan(db: sqlite3.Connection) -> int:
+    """Count tracks not yet scanned for mood/theme tags."""
+    row = db.execute(
+        "SELECT COUNT(*) as cnt FROM tracks WHERE essentia_scanned_at IS NULL AND title IS NOT NULL"
+    ).fetchone()
+    return row["cnt"]
+
+
+def count_tracks_with_mood_tags(db: sqlite3.Connection) -> int:
+    """Count tracks that have at least one mood or theme tag."""
+    row = db.execute(
+        "SELECT COUNT(*) as cnt FROM tracks WHERE (mood_tags IS NOT NULL OR theme_tags IS NOT NULL) AND title IS NOT NULL"
+    ).fetchone()
+    return row["cnt"]
+
+
+def bulk_update_mood_tags(db: sqlite3.Connection, rows: list[tuple]):
+    """Batch-update mood/theme tags for multiple tracks.
+    Each row: (mood_tags, theme_tags, essentia_scanned_at, track_id)
+    """
+    db.executemany("""
+        UPDATE tracks SET mood_tags = ?, theme_tags = ?, essentia_scanned_at = ?
+        WHERE id = ?
+    """, rows)
+
+
+def reset_mood_tags(db: sqlite3.Connection) -> int:
+    """Reset all mood/theme tag data so tracks can be re-scanned."""
+    db.execute("""
+        UPDATE tracks SET mood_tags = NULL, theme_tags = NULL, essentia_scanned_at = NULL
+    """)
+    count = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL").fetchone()["cnt"]
+    return count
+
+
+def get_mood_tag_summary(db: sqlite3.Connection) -> list[dict]:
+    """Get distinct mood tags with approximate counts.
+    Parses comma-separated mood_tags column in Python."""
+    rows = db.execute("""
+        SELECT mood_tags FROM tracks
+        WHERE mood_tags IS NOT NULL AND mood_tags != ''
+    """).fetchall()
+    counts: dict[str, int] = {}
+    for r in rows:
+        for tag in r["mood_tags"].split(", "):
+            tag = tag.strip()
+            if tag:
+                counts[tag] = counts.get(tag, 0) + 1
+    return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
+
+
+def get_theme_tag_summary(db: sqlite3.Connection) -> list[dict]:
+    """Get distinct theme tags with approximate counts."""
+    rows = db.execute("""
+        SELECT theme_tags FROM tracks
+        WHERE theme_tags IS NOT NULL AND theme_tags != ''
+    """).fetchall()
+    counts: dict[str, int] = {}
+    for r in rows:
+        for tag in r["theme_tags"].split(", "):
+            tag = tag.strip()
+            if tag:
+                counts[tag] = counts.get(tag, 0) + 1
+    return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
 
 
 # --- Settings ---

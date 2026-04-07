@@ -42,6 +42,7 @@ async function init(){
   loadServers();
   pollScan();
   pollEnrichment();
+  pollMoodScan();
 }
 
 // --- Media server status ---
@@ -398,6 +399,28 @@ function pollEnrichment(){
   enrichTimer=setInterval(check,15000);
 }
 
+// --- Mood scan progress ---
+let moodTimer=null;
+function pollMoodScan(){
+  if(moodTimer)clearInterval(moodTimer);
+  const check=async()=>{
+    try{
+      const s=await api('/mood/status');
+      const incomplete=s.remaining>0;
+      if(incomplete){
+        $('#moodBar').classList.add('on');
+        const pct=s.percent??0;
+        $('#moodFill').style.width=`${pct}%`;
+        $('#moodText').textContent=s.running?`${pct}% (${s.message})`:`${pct}%`;
+      }else{
+        $('#moodBar').classList.remove('on');
+      }
+    }catch{}
+  };
+  check();
+  moodTimer=setInterval(check,15000);
+}
+
 // --- Config modal ---
 const cfgFieldMap={
   navidrome_url:'cfgNavidromeUrl',
@@ -411,6 +434,12 @@ const cfgFieldMap={
   gemini_model:'cfgGeminiModel',
   lastfm_api_key:'cfgLastfmApiKey',
   scan_interval_hours:'cfgScanIntervalHours',
+  mood_scan_batch_size:'cfgMoodScanBatchSize',
+  mood_scan_interval_hours:'cfgMoodScanIntervalHours',
+};
+// Toggle fields need special handling (not text inputs)
+const cfgToggleMap={
+  mood_scan_enabled:'cfgMoodScanEnabled',
 };
 
 async function openConfig(){
@@ -419,6 +448,10 @@ async function openConfig(){
     for(const[key,elId]of Object.entries(cfgFieldMap)){
       const el=$('#'+elId);
       if(el)el.value=cfg[key]||'';
+    }
+    for(const[key,elId]of Object.entries(cfgToggleMap)){
+      const el=$('#'+elId);
+      if(el)el.classList.toggle('on',cfg[key]==='true');
     }
   }catch(e){toast('Failed to load config','error');return}
   $('#cfgOverlay').classList.add('on');
@@ -433,6 +466,10 @@ async function saveConfig(){
   for(const[key,elId]of Object.entries(cfgFieldMap)){
     const el=$('#'+elId);
     if(el)body[key]=el.value;
+  }
+  for(const[key,elId]of Object.entries(cfgToggleMap)){
+    const el=$('#'+elId);
+    if(el)body[key]=el.classList.contains('on')?'true':'false';
   }
   try{
     await api('/config',{method:'PUT',body:JSON.stringify(body)});

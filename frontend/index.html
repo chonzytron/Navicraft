@@ -66,6 +66,15 @@
     </div>
   </div>
 
+  <!-- Mood Scan Progress -->
+  <div class="enrich-bar" id="moodBar">
+    <div class="enrich-row">
+      <span class="enrich-label">Mood</span>
+      <div class="enrich-track"><div class="enrich-fill mood-scan" id="moodFill"></div></div>
+      <span class="enrich-pct" id="moodText">0%</span>
+    </div>
+  </div>
+
   <!-- Stats -->
   <div class="stats" id="stats" style="display:none">
     <div class="stat"><div class="stat-val" id="vSongs">&mdash;</div><div class="stat-lbl">Songs</div></div>
@@ -212,6 +221,21 @@
         <label class="cfg-field">
           <span>Scan Interval (hours)</span>
           <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgScanIntervalHours" placeholder="6" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+        </label>
+      </div>
+      <div class="cfg-section">
+        <h3>Mood / Theme Tagging</h3>
+        <label class="cfg-field cfg-toggle-field">
+          <span>Enable Mood Scanning</span>
+          <div class="toggle-track" id="cfgMoodScanEnabled" onclick="this.classList.toggle('on')"></div>
+        </label>
+        <label class="cfg-field">
+          <span>Batch Size (tracks per run)</span>
+          <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgMoodScanBatchSize" placeholder="50" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+        </label>
+        <label class="cfg-field">
+          <span>Scan Interval (hours)</span>
+          <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgMoodScanIntervalHours" placeholder="24" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
         </label>
       </div>
     </div>

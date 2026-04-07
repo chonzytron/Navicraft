@@ -11,6 +11,7 @@ import scanner
 import navidrome
 import plex
 import popularity
+import mood_scanner
 import database as db
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,22 @@ async def _scheduled_enrichment():
         logger.exception("Scheduled enrichment failed")
 
 
+async def _scheduled_mood_scan():
+    """Run mood/theme tag scanning if enabled."""
+    if not config.mood_scan_enabled:
+        return
+    try:
+        with db.get_db() as conn:
+            remaining = db.count_tracks_without_mood_scan(conn)
+        if remaining == 0:
+            return
+        logger.info("Mood scan job: %d tracks remaining", remaining)
+        result = await mood_scanner.scan_mood_tags(batch_size=config.mood_scan_batch_size)
+        logger.info("Mood scan job done: %s", result)
+    except Exception:
+        logger.exception("Scheduled mood scan failed")
+
+
 def start_scheduler():
     """Start the background scheduler."""
     global _scheduler
@@ -94,10 +111,21 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # Mood / theme tag scanning — runs at configurable interval (default 24h).
+    # Only processes tracks if mood_scan_enabled is true.
+    _scheduler.add_job(
+        _scheduled_mood_scan,
+        trigger=IntervalTrigger(hours=config.mood_scan_interval_hours),
+        id="mood_scan",
+        name="Mood tag scan",
+        replace_existing=True,
+    )
+
     _scheduler.start()
     logger.info(
-        "Scheduler started: scanning every %dh, enrichment every 2m",
+        "Scheduler started: scanning every %dh, enrichment every 2m, mood scan every %dh",
         config.scan_interval_hours,
+        config.mood_scan_interval_hours,
     )
 
 

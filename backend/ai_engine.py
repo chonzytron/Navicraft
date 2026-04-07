@@ -44,7 +44,7 @@ Rules:
 - genres: select broadly — include related/adjacent genres. If the prompt is about mood rather than genre, include genres that typically carry that mood.
 - artists: only include if the prompt implies specific artists or very specific styles. Leave empty for open-ended prompts.
 - years: set range if the prompt implies an era. Use null for no constraint. The year field represents the ORIGINAL release year of the song, not any compilation or re-issue date. So "best of the 90s" means year_min=1990, year_max=1999.
-- moods: include if mood tags might exist (e.g. "chill", "energetic", "melancholy", "dark", "uplifting")
+- moods: include if mood or theme tags might exist. Mood tags describe emotional qualities (e.g. "happy", "sad", "energetic", "calm", "dark", "melancholic", "uplifting", "romantic"). Theme tags describe context/setting (e.g. "party", "film", "nature", "summer", "sport", "travel", "christmas"). Include BOTH mood and theme terms — they are searched in the same filter.
 - bpm: set range if tempo matters (workout=120-160, chill=60-100, etc). Use null otherwise.
 - keywords: additional terms that might appear in song titles, comments, or album names
 - exclude_genres: if the prompt says "NOT" or "no" or "without" a genre, put it here (e.g. "jazz but NOT smooth jazz" → exclude_genres: ["smooth jazz"])
@@ -55,7 +55,7 @@ Rules:
 
 PASS2_SYSTEM = """You are a music curator. Given a user's playlist prompt and a list of candidate songs from their library, select and order the final playlist.
 
-Candidates are provided in compact format: id;title;artist;album;genre;year;duration;bpm;mood;popularity
+Candidates are provided in compact format: id;title;artist;album;genre;year;duration;bpm;mood;mood_tags;theme_tags;popularity
 
 Respond ONLY with a JSON object (no markdown, no backticks):
 {
@@ -215,12 +215,18 @@ async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str
     Pass 1: Extract search filters from the user's prompt.
     library_summary should contain: genres, top_artists, year_range
     """
+    # Combine all mood/theme sources into a single list for the AI
+    mood_tag_names = [t['tag'] for t in library_summary.get('mood_tags', [])[:30]]
+    theme_tag_names = [t['tag'] for t in library_summary.get('theme_tags', [])[:30]]
+    file_mood_names = [m['mood'] for m in library_summary.get('moods', [])[:20]]
+    all_mood_labels = sorted(set(mood_tag_names + theme_tag_names + file_mood_names))
+
     user_msg = f"""My music library contains:
 - Genres: {', '.join(library_summary.get('genres', [])[:80])}
 - Top artists ({library_summary.get('artist_count', 0)} total): {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:50])}
 - Years: {library_summary.get('year_range', {}).get('min_year', '?')} to {library_summary.get('year_range', {}).get('max_year', '?')}
 - Total songs: {library_summary.get('song_count', 0)}
-{f"- Moods tagged: {', '.join(m['mood'] for m in library_summary.get('moods', [])[:40])}" if library_summary.get('moods') else ''}
+{f"- Available mood/theme tags: {', '.join(all_mood_labels)}" if all_mood_labels else ''}
 
 User's playlist prompt: "{prompt}"
 
@@ -260,6 +266,8 @@ async def pass2_select_songs(
             dur,
             str(c["bpm"]) if c.get("bpm") else "",
             c.get("mood") or "",
+            c.get("mood_tags") or "",
+            c.get("theme_tags") or "",
             str(c["popularity"]) if c.get("popularity") is not None else "",
         ]
         candidate_lines.append(";".join(parts))

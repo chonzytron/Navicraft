@@ -101,8 +101,10 @@ def _extract_metadata(file_path: str) -> Optional[dict]:
             meta["sample_rate"] = getattr(info, "sample_rate", None)
             meta["channels"] = getattr(info, "channels", None)
 
-        # Year — try 'date', then 'year', then 'originaldate'
-        for date_key in ("date", "year", "originaldate", "originalyear"):
+        # Year — prefer original release date tags to avoid picking up
+        # compilation/re-issue dates (e.g. "best of the 90s" compilation
+        # released in 2005 should still yield 1990s for individual tracks).
+        for date_key in ("originaldate", "originalyear", "date", "year"):
             date_val = _safe_first(audio, date_key)
             if date_val:
                 meta["year"] = _safe_int(str(date_val)[:4])
@@ -155,6 +157,15 @@ def _extract_extended_tags(file_path: str, ext: str, meta: dict):
             tpub = tags.get("TPUB")
             if tpub and tpub.text:
                 meta["label"] = tpub.text[0]
+            # Original release year — ID3 TDOR (v2.4) or TORY (v2.3)
+            # overrides date/year from easy tags to avoid compilation dates
+            for frame_id in ("TDOR", "TORY"):
+                frame = tags.get(frame_id)
+                if frame and frame.text:
+                    orig_year = _safe_int(str(frame.text[0])[:4])
+                    if orig_year:
+                        meta["year"] = orig_year
+                        break
 
         elif ext == ".flac":
             try:

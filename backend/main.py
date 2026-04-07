@@ -435,6 +435,48 @@ async def generate_playlist(req: GenerateRequest):
 
             total_duration = sum(t.get("duration") or 0 for t in matched_songs)
 
+            # Enforce ±5 minute duration constraint when in duration mode
+            if req.target_duration_min and matched_songs:
+                target_secs = req.target_duration_min * 60
+                tolerance_secs = 5 * 60  # ±5 minutes
+                max_secs = target_secs + tolerance_secs
+                min_secs = target_secs - tolerance_secs
+
+                # Trim from the end if over the upper bound
+                if total_duration > max_secs:
+                    trimmed = []
+                    running = 0.0
+                    for t in matched_songs:
+                        dur = t.get("duration") or 0
+                        if running + dur > max_secs:
+                            # Include if it brings us closer to target than excluding
+                            if abs(running - target_secs) > abs(running + dur - target_secs):
+                                trimmed.append(t)
+                                running += dur
+                            break
+                        trimmed.append(t)
+                        running += dur
+                        # Stop if we're within the target window
+                        if running >= min_secs:
+                            break
+                    matched_songs = trimmed
+                    total_duration = sum(t.get("duration") or 0 for t in matched_songs)
+
+                # Pad from remaining candidates if under the lower bound
+                elif total_duration < min_secs:
+                    used_ids = {t["id"] for t in matched_songs}
+                    remaining = [c for c in candidates if c["id"] not in used_ids]
+                    # Sort remaining by popularity descending for quality padding
+                    remaining.sort(key=lambda c: c.get("popularity") or 0, reverse=True)
+                    for c in remaining:
+                        dur = c.get("duration") or 0
+                        if total_duration + dur > max_secs:
+                            continue
+                        matched_songs.append(c)
+                        total_duration += dur
+                        if total_duration >= min_secs:
+                            break
+
             result = {
                 "name": ai_result.get("name", "AI Playlist"),
                 "description": ai_result.get("description", ""),

@@ -11,7 +11,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
    Click the ♪ logo at any time to trigger a manual rescan.
 
 2. ENRICH (background)
-   Query Deezer + Last.fm for each track → popularity scores (0–100)
+   Query Deezer + Last.fm + MusicBrainz for each track → popularity scores (0–100)
    Higher scores = well-known, beloved tracks
    Runs automatically every 2 minutes until all tracks are enriched.
 
@@ -31,7 +31,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 ## Features
 
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
-- **Popularity-aware** — Uses Deezer track rank and Last.fm listener counts so playlists favour well-known tracks over deep cuts (Deezer requires no API key)
+- **Popularity-aware** — Uses Deezer track rank, Last.fm listener counts, and MusicBrainz community ratings so playlists favour well-known tracks over deep cuts (Deezer and MusicBrainz require no API key)
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
 - **Artist diversity** — Candidates are capped at 30% of requested song count per artist (min 3) so one artist never dominates; cap is skipped when specific artists are requested
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
@@ -122,15 +122,16 @@ These can also be set via env vars for initial bootstrap — the UI config overr
 
 ## Popularity Enrichment
 
-NaviCraft scores each track 0–100 using up to three sources, blended by confidence:
+NaviCraft scores each track 0–100 using up to four sources, blended by confidence:
 
 | Source | Signal | Notes |
 |--------|--------|-------|
 | **Deezer** | Track rank (0–1M) mapped to 0–100 | Best signal; free, no API key needed |
 | **Last.fm** | Listener count + scrobble ratio | Good; free API key |
+| **MusicBrainz** | Community ratings (0–5 → 0–100) + vote count | Free, no API key; 1 req/sec rate limit |
 | **Track position** | Album position heuristic | +5 for tracks 1–2, +3 for 3–4 |
 
-Deezer is always available with no configuration needed (50 requests per 5 seconds). Last.fm is optional but improves accuracy.
+Deezer and MusicBrainz are always available with no configuration needed. Last.fm is optional but improves accuracy.
 
 ## Metadata Extracted
 
@@ -156,7 +157,7 @@ navicraft/
 │   ├── ai_engine.py     # Two-pass AI (Claude / Gemini)
 │   ├── navidrome.py     # Subsonic API client
 │   ├── plex.py          # Plex HTTP API client
-│   ├── popularity.py    # Deezer + Last.fm enrichment
+│   ├── popularity.py    # Deezer + Last.fm + MusicBrainz enrichment
 │   ├── scheduler.py     # Background scan + enrichment jobs
 │   └── requirements.txt
 ├── frontend/
@@ -216,7 +217,7 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 ## Tips
 
 - **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer.
-- **Deezer works out of the box.** No API key needed. Add a Last.fm key for even better popularity data.
+- **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data.
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
 - **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
 - **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).

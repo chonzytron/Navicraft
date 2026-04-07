@@ -202,6 +202,37 @@
     Required="false"
     Mask="false">.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc</Config>
 
+  <!-- Mood / Theme Tagging (configurable in UI) -->
+  <Config
+    Name="Mood Scan Enabled"
+    Target="MOOD_SCAN_ENABLED"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Set to 'true' to enable Essentia-based mood/theme audio analysis. Default: false"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Mood Scan Batch Size"
+    Target="MOOD_SCAN_BATCH_SIZE"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Number of tracks to process per mood scan run. Default: 50"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Mood Scan Interval (hours)"
+    Target="MOOD_SCAN_INTERVAL_HOURS"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Hours to wait between mood scan batches (timer starts after batch completes). Default: 24"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
+
   <!-- Internal paths -->
   <Config
     Name="Music Dir (container)"

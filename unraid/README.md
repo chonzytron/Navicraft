@@ -11,7 +11,7 @@
    - Adjust `WEB_PORT` if 8085 is taken
 6. Click **Run Script**
 7. Access NaviCraft at `http://[YOUR_UNRAID_IP]:8085`
-8. Click the **Settings gear icon** in the header to configure Navidrome/Plex connections, AI provider and API keys, Last.fm, and scan interval
+8. Click the **Settings gear icon** in the header to configure Navidrome/Plex connections, AI provider and API keys, Last.fm, scan interval, and mood/theme tagging
 
 ### Run at Array Start
 
@@ -47,7 +47,7 @@ docker compose up -d --build
 
 ## Configuration Reference
 
-Most settings (servers, AI keys, models, Last.fm, scan interval) are configured from the **Settings gear icon** in the web UI after first launch. They persist to `/data/navicraft_config.json`.
+Most settings (servers, AI keys, models, Last.fm, scan interval, mood/theme tagging) are configured from the **Settings gear icon** in the web UI after first launch. They persist to `/data/navicraft_config.json`.
 
 ### Deploy script variables
 
@@ -77,6 +77,9 @@ These are set from the Settings panel in the web UI. They can also be pre-set as
 | Gemini Model | `gemini-2.5-flash` | Gemini model |
 | Last.fm API Key | — | Last.fm API key (free, improves popularity) |
 | Scan Interval | `6` hours | How often to auto-scan the library |
+| Mood Scan Enabled | `false` | Enable Essentia-based mood/theme audio analysis |
+| Mood Scan Batch Size | `50` | Tracks to process per mood scan run |
+| Mood Scan Interval | `24` hours | Hours to wait between mood scan batches (starts after batch completes) |
 
 ## Networking
 
@@ -128,6 +131,12 @@ docker logs -f navicraft
 **Popularity not enriching:**
 - Check logs for API errors: `docker logs navicraft | grep -i deezer`
 - Deezer rate limits are generous (50 req/5s); if hit, NaviCraft slows down automatically
+
+**Mood scanning not working:**
+- Ensure mood scanning is enabled in Settings (gear icon) under "Mood / Theme Tagging"
+- On first run, Essentia models (~80MB) auto-download — check logs for download progress
+- Mood scanning is CPU-heavy (~2-5s per track); large batches may take a while
+- Check logs: `docker logs navicraft | grep -i mood`
 
 **AI generation failing:**
 - Check logs for the actual error: `docker logs navicraft | grep ERROR`

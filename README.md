@@ -15,6 +15,12 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
    Higher scores = well-known, beloved tracks
    Runs automatically every 2 minutes until all tracks are enriched.
 
+2b. MOOD/THEME TAG (optional, background)
+    Essentia MTG-Jamendo model analyzes audio → mood tags (happy, sad, energetic, ...)
+    + theme tags (film, party, nature, summer, ...).
+    Supplemented with Last.fm user tags and MusicBrainz folksonomy tags.
+    Configurable: process X tracks every Y hours. Enable in Settings.
+
 3. GENERATE (two-pass AI)
    Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, exclusions)
    SQLite query narrows to ~500 candidates, biased by popularity, with proportional per-artist diversity cap
@@ -32,6 +38,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
 - **Popularity-aware** — Uses Deezer track rank, Last.fm listener counts, and MusicBrainz community ratings so playlists favour well-known tracks over deep cuts (Deezer and MusicBrainz require no API key)
+- **Mood & theme tagging** — Essentia audio analysis classifies tracks into mood (happy, calm, dark, energetic, ...) and theme (film, party, summer, ...) tags. Supplemented by Last.fm and MusicBrainz user tags. The AI uses these to match prompts like "chill vibes for a road trip" more accurately.
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
 - **Artist diversity** — Candidates are capped at 30% of requested song count per artist (min 3) so one artist never dominates; cap is skipped when specific artists are requested
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
@@ -56,7 +63,7 @@ Open `http://localhost:8085`
 
 Click the **Settings gear icon** in the header to configure your media servers, AI provider and API keys, and other settings. These are saved to disk and persist across restarts.
 
-The first scan indexes your full library (a few minutes for large collections). Subsequent scans are incremental. Popularity enrichment runs in the background automatically.
+The first scan indexes your full library (a few minutes for large collections). Subsequent scans are incremental. Popularity enrichment runs in the background automatically. To enable mood/theme tagging, toggle it on in Settings.
 
 ## Unraid Deployment
 
@@ -98,6 +105,9 @@ Most settings can be configured from the **Settings gear icon** in the web UI. T
 | Gemini Model | `gemini-2.5-flash` | Gemini model identifier |
 | Last.fm API Key | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
 | Scan Interval | `6` hours | Background scan interval |
+| Mood Scan Enabled | `false` | Enable Essentia-based mood/theme tagging |
+| Mood Scan Batch Size | `50` | Number of tracks to process per mood scan run |
+| Mood Scan Interval | `24` hours | Hours to wait between mood scan batches (starts after batch completes) |
 
 These can also be set via env vars for initial bootstrap — the UI config overrides them.
 
@@ -133,6 +143,26 @@ NaviCraft scores each track 0–100 using up to four sources, blended by confide
 
 Deezer and MusicBrainz are always available with no configuration needed. Last.fm is optional but improves accuracy.
 
+## Mood & Theme Tagging
+
+NaviCraft can analyze your audio files locally to classify tracks into **mood tags** (happy, sad, energetic, calm, dark, uplifting, ...) and **theme tags** (film, party, nature, summer, sport, travel, ...). This helps the AI better match prompts like "chill vibes for a road trip" or "energetic workout mix".
+
+**Sources (combined per track):**
+
+| Source | Type | Notes |
+|--------|------|-------|
+| **Essentia** (MTG-Jamendo) | Local audio analysis | CPU-heavy (~2-5s/track), models auto-download (~80MB) |
+| **File tags** | Existing mood field | Reads mood from ID3/Vorbis/FLAC tags already in your files |
+| **Last.fm** | `track.getTopTags` API | User-applied tags categorized into mood/theme (needs API key) |
+| **MusicBrainz** | Folksonomy tags | Community tags, free, no API key |
+
+**How it works:**
+- Enable in Settings under "Mood / Theme Tagging"
+- Configure batch size (X tracks) and interval (Y hours between batches)
+- The scanner processes X tracks, then waits Y hours before the next batch
+- Tags are stored separately as `mood_tags` and `theme_tags` in the database
+- The AI uses these tags as filters in Pass 1 and as context in Pass 2
+
 ## Metadata Extracted
 
 NaviCraft reads tags directly from your files using `mutagen`:
@@ -158,7 +188,8 @@ navicraft/
 │   ├── navidrome.py     # Subsonic API client
 │   ├── plex.py          # Plex HTTP API client
 │   ├── popularity.py    # Deezer + Last.fm + MusicBrainz enrichment
-│   ├── scheduler.py     # Background scan + enrichment jobs
+│   ├── mood_scanner.py  # Essentia mood/theme tagging + API tag enrichment
+│   ├── scheduler.py     # Background scan + enrichment + mood scan jobs
 │   └── requirements.txt
 ├── frontend/
 │   ├── index.html       # SPA markup (no build step)
@@ -197,6 +228,9 @@ navicraft/
 | POST | `/api/popularity/enrich` | Manually trigger an enrichment batch |
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
 | GET | `/api/popularity/status` | Enrichment progress (enriched/total/%) |
+| POST | `/api/mood/scan` | Manually trigger a mood/theme tag scan batch |
+| GET | `/api/mood/status` | Mood scan progress and coverage stats |
+| POST | `/api/mood/reset` | Reset all mood/theme tags for re-scanning |
 | POST | `/api/export/m3u` | Download playlist as .m3u file |
 
 ### Generate request
@@ -216,8 +250,8 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 
 ## Tips
 
-- **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer.
-- **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data.
+- **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer. Enable mood/theme scanning in Settings to auto-tag tracks via audio analysis.
+- **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data and richer mood/theme tags.
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
 - **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
 - **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).

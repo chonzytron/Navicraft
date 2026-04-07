@@ -9,7 +9,7 @@ AI-powered playlist generator for Navidrome and Plex/Plexamp. Scans a local musi
 ```
 backend/
 ├── main.py          # FastAPI app, all HTTP routes, startup lifecycle, SSE streaming, rate limiting
-├── config.py        # Env var config dataclass (all settings from .env)
+├── config.py        # Config dataclass with JSON file persistence + env var fallbacks
 ├── database.py      # SQLite schema, queries, migrations, bulk update helpers
 ├── scanner.py       # mutagen-based file scanner, reads ID3/Vorbis/FLAC/MP4 tags
 ├── ai_engine.py     # Two-pass AI: intent extraction → SQLite filter → song selection
@@ -57,6 +57,7 @@ unraid/
 - **Retry logic** everywhere: AI calls (3 retries, exponential backoff), Navidrome/Plex calls, popularity lookups
 - **Song ID normalisation**: AI responses may return song IDs as strings; backend casts to `int` before candidate map lookup to prevent mismatches.
 - **AI errors surfaced to UI**: API error messages are extracted from JSON responses and raised as `ValueError` so they propagate through the SSE error event to the frontend instead of showing a generic "check logs" message.
+- **UI-configurable settings**: Navidrome, Plex, AI provider/keys/models, Last.fm API key, and scan interval are configurable from the Settings gear icon in the web UI. Saved to `/data/navicraft_config.json`. Env vars act as initial defaults; JSON config takes precedence. Secrets are masked in API responses.
 
 ## Running Locally
 
@@ -64,19 +65,19 @@ unraid/
 cd backend
 pip install -r requirements.txt
 export MUSIC_DIR=/path/to/music
+uvicorn main:app --reload --port 8085
+```
 
-# Navidrome (configure one or both media servers)
+On first launch, click the **Settings gear icon** in the header to configure Navidrome/Plex connections, AI provider and API keys, etc. These persist to a JSON config file.
+
+Alternatively, set env vars as initial defaults (the UI config overrides them):
+
+```bash
 export NAVIDROME_URL=http://localhost:4533
 export NAVIDROME_USER=admin
 export NAVIDROME_PASSWORD=xxx
-
-# Plex / Plexamp (alternative or additional)
-export PLEX_URL=http://localhost:32400
-export PLEX_TOKEN=your-plex-token
-
-export AI_PROVIDER=claude          # or gemini
-export CLAUDE_API_KEY=sk-ant-xxx   # Anthropic API key (separate from Claude.ai subscription)
-uvicorn main:app --reload --port 8085
+export AI_PROVIDER=claude
+export CLAUDE_API_KEY=sk-ant-xxx
 ```
 
 ## Running with Docker
@@ -89,7 +90,7 @@ docker compose up -d --build
 
 ## Common Development Tasks
 
-- **Add a new media server**: Create a new module (like `plex.py`) implementing `test_connection()`, `sync_*_ids()`, `create_playlist()`, `get_playlists()`, `delete_playlist()`. Add config vars in `config.py`, add DB column + migration in `database.py`, add routes in `main.py`, update `scheduler.py`, and add frontend server button.
+- **Add a new media server**: Create a new module (like `plex.py`) implementing `test_connection()`, `sync_*_ids()`, `create_playlist()`, `get_playlists()`, `delete_playlist()`. Add config vars in `config.py` (add to `EDITABLE_FIELDS`/`SECRET_FIELDS` and `reload_from_file()`), add DB column + migration in `database.py`, add routes in `main.py`, update `scheduler.py`, add frontend server button, and add fields to the config modal in `index.html` + `cfgFieldMap` in `app.js`.
 - **Add a new AI provider**: Add a `_call_newprovider()` function in `ai_engine.py`, add config vars in `config.py`, add routing in `_call_ai()`
 - **Add metadata fields**: Update `SCHEMA` in `database.py`, update `_extract_metadata()` in `scanner.py`, update `filter_tracks()` if the field should be filterable
 - **Add API endpoints**: Add route in `main.py`, Pydantic models at the top of the file
@@ -102,6 +103,8 @@ docker compose up -d --build
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check (used by Docker HEALTHCHECK) |
+| GET | `/api/config` | Get current editable config (secrets masked) |
+| PUT | `/api/config` | Update config and persist to JSON file |
 | GET | `/api/ai/providers` | List configured providers with model names |
 | GET | `/api/navidrome/test` | Test Navidrome connection |
 | GET | `/api/plex/test` | Test Plex connection |
@@ -145,6 +148,7 @@ docker compose up -d --build
 ## Frontend Features
 
 - **SPA** — `frontend/index.html` (markup) + `assets/app.js` (logic) + `assets/styles.css`, vanilla JS, no build step
+- **Settings modal** — gear icon in header opens config panel for Navidrome, Plex, AI provider/keys/models, Last.fm, and scan interval; persists to `/data/navicraft_config.json`
 - **Media server status indicators** — green/red dots in header for each configured server (Navidrome and/or Plex); click to retest
 - **Server selector** — pill toggle (Navidrome / Plex) shown when both servers are configured; controls where playlists are saved
 - **Rescan trigger** — click the ♪ logo mark to trigger an incremental library scan

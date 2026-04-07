@@ -39,6 +39,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 - **Rich metadata** — Scans BPM, mood, composer, label directly from audio files (richer than the Subsonic API)
 - **Multiple media servers** — Save playlists to Navidrome, Plex/Plexamp, or both. Toggle between servers in the UI when both are configured.
 - **Export options** — Save to your media server or download as .m3u
+- **Settings panel** — Gear icon in header to configure servers, AI keys, models, and more — persists to disk, no restart needed
 - **Server status** — Live connection indicators in the header for each configured server; click to retest
 
 ## Quick Start (Docker)
@@ -53,6 +54,8 @@ docker compose up -d --build
 
 Open `http://localhost:8085`
 
+Click the **Settings gear icon** in the header to configure your media servers, AI provider and API keys, and other settings. These are saved to disk and persist across restarts.
+
 The first scan indexes your full library (a few minutes for large collections). Subsequent scans are incremental. Popularity enrichment runs in the background automatically.
 
 ## Unraid Deployment
@@ -64,7 +67,7 @@ See [unraid/README.md](unraid/README.md) for detailed instructions. Two options:
 1. Install the **User Scripts** plugin from Community Applications
 2. Go to **Settings > User Scripts > Add New Script**
 3. Paste the contents of `unraid/deploy-navicraft.sh`
-4. Edit the configuration block at the top — set your music path, Navidrome URL, and API keys
+4. Edit the configuration block at the top — set your music path and port (server/AI settings are configured in the web UI after first launch)
 5. Click **Run Script**
 
 The script always pulls the latest image, prunes old layers, and restarts the container cleanly.
@@ -77,23 +80,32 @@ The script always pulls the latest image, prunes old layers, and restarts the co
 
 ## Configuration
 
-### Container environment variables
+Most settings can be configured from the **Settings gear icon** in the web UI. These persist to `/data/navicraft_config.json` and take effect immediately without a restart.
+
+### UI-configurable settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Navidrome URL | `http://localhost:4533` | Navidrome server URL |
+| Navidrome User | `admin` | Navidrome username |
+| Navidrome Password | — | Navidrome password |
+| Plex URL | — | Plex server URL (e.g. `http://localhost:32400`) |
+| Plex Token | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
+| AI Provider | `claude` | Default AI provider: `claude` or `gemini` |
+| Claude API Key | — | Anthropic API key (requires separate API billing) |
+| Claude Model | `claude-3-5-sonnet-20241022` | Claude model identifier |
+| Gemini API Key | — | Google AI API key |
+| Gemini Model | `gemini-2.5-flash` | Gemini model identifier |
+| Last.fm API Key | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
+| Scan Interval | `6` hours | Background scan interval |
+
+These can also be set via env vars for initial bootstrap — the UI config overrides them.
+
+### Container environment variables (not in UI)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MUSIC_DIR` | `/music` | Music directory inside the container |
-| `NAVIDROME_URL` | `http://localhost:4533` | Navidrome server URL (leave empty if using Plex only) |
-| `NAVIDROME_USER` | `admin` | Navidrome username |
-| `NAVIDROME_PASSWORD` | — | Navidrome password |
-| `PLEX_URL` | — | Plex server URL (e.g. `http://localhost:32400`). Leave empty if using Navidrome only. |
-| `PLEX_TOKEN` | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
-| `AI_PROVIDER` | `claude` | Default AI provider: `claude` or `gemini` |
-| `CLAUDE_API_KEY` | — | Anthropic API key (requires separate API billing) |
-| `CLAUDE_MODEL` | `claude-3-5-sonnet-20241022` | Claude model identifier |
-| `GEMINI_API_KEY` | — | Google AI API key |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model identifier |
-| `LASTFM_API_KEY` | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
-| `SCAN_INTERVAL_HOURS` | `6` | Background scan interval |
 | `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc` | File types to index |
 | `MAX_CANDIDATES` | `500` | Max songs passed to AI Pass 2 |
 | `DB_PATH` | `/data/navicraft.db` | SQLite database path |
@@ -138,7 +150,7 @@ This is richer than what the Subsonic API exposes — especially BPM and mood, w
 navicraft/
 ├── backend/
 │   ├── main.py          # FastAPI routes, SSE streaming, rate limiting
-│   ├── config.py        # Environment variable config
+│   ├── config.py        # Config with JSON persistence + env var fallbacks
 │   ├── database.py      # SQLite schema, queries, migrations
 │   ├── scanner.py       # mutagen-based file scanner
 │   ├── ai_engine.py     # Two-pass AI (Claude / Gemini)
@@ -167,6 +179,8 @@ navicraft/
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/ai/providers` | List configured AI providers |
+| GET | `/api/config` | Get editable config (secrets masked) |
+| PUT | `/api/config` | Update config and persist to disk |
 | GET | `/api/servers` | List configured media servers |
 | GET | `/api/navidrome/test` | Test Navidrome connection |
 | GET | `/api/plex/test` | Test Plex connection |

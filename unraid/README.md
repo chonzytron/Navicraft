@@ -7,11 +7,11 @@
 3. Name it `deploy-navicraft`
 4. Click the gear icon and paste the contents of `deploy-navicraft.sh`
 5. **Edit the configuration block** at the top of the script:
-   - Set your media server — Navidrome (`NAVIDROME_URL`, `NAVIDROME_USER`, `NAVIDROME_PASSWORD`) and/or Plex (`PLEX_URL`, `PLEX_TOKEN`). You can configure one or both.
-   - Set `AI_PROVIDER` and the matching API key (`CLAUDE_API_KEY` or `GEMINI_API_KEY`)
    - Adjust `MUSIC_PATH` if your music isn't at `/mnt/user/media/music`
+   - Adjust `WEB_PORT` if 8085 is taken
 6. Click **Run Script**
 7. Access NaviCraft at `http://[YOUR_UNRAID_IP]:8085`
+8. Click the **Settings gear icon** in the header to configure Navidrome/Plex connections, AI provider and API keys, Last.fm, and scan interval
 
 ### Run at Array Start
 
@@ -47,23 +47,36 @@ docker compose up -d --build
 
 ## Configuration Reference
 
+Most settings (servers, AI keys, models, Last.fm, scan interval) are configured from the **Settings gear icon** in the web UI after first launch. They persist to `/data/navicraft_config.json`.
+
+### Deploy script variables
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MUSIC_PATH` | `/mnt/user/media/music` | Host path to your music library (mounted read-only) |
-| `APPDATA_PATH` | `/mnt/user/appdata/navicraft` | Host path for persistent data (SQLite DB) |
+| `APPDATA_PATH` | `/mnt/user/appdata/navicraft` | Host path for persistent data (SQLite DB + config) |
 | `WEB_PORT` | `8085` | Web UI port |
-| `NAVIDROME_URL` | `http://192.168.1.100:4533` | Navidrome URL (use your Unraid IP). Leave empty if using Plex only. |
-| `NAVIDROME_USER` | `admin` | Navidrome username |
-| `NAVIDROME_PASSWORD` | — | Navidrome password |
-| `PLEX_URL` | — | Plex server URL (e.g. `http://192.168.1.100:32400`). Leave empty if using Navidrome only. |
-| `PLEX_TOKEN` | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
-| `AI_PROVIDER` | `claude` | `claude` or `gemini` |
-| `CLAUDE_API_KEY` | — | Anthropic API key |
-| `CLAUDE_MODEL` | `claude-3-5-sonnet-20241022` | Claude model |
-| `GEMINI_API_KEY` | — | Google Gemini API key |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
-| `LASTFM_API_KEY` | — | Last.fm API key (free, improves popularity) |
-| `SCAN_INTERVAL_HOURS` | `6` | How often to auto-scan the library |
+| `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,...` | Audio file extensions to scan |
+| `MAX_CANDIDATES` | `500` | Max songs passed to AI Pass 2 |
+
+### UI-configurable settings
+
+These are set from the Settings panel in the web UI. They can also be pre-set as env vars in the deploy script (uncomment them) for initial bootstrap — UI settings override env vars.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Navidrome URL | — | Navidrome URL (use your Unraid IP, not `localhost`) |
+| Navidrome User | `admin` | Navidrome username |
+| Navidrome Password | — | Navidrome password |
+| Plex URL | — | Plex server URL (e.g. `http://192.168.1.100:32400`) |
+| Plex Token | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
+| AI Provider | `claude` | `claude` or `gemini` |
+| Claude API Key | — | Anthropic API key |
+| Claude Model | `claude-3-5-sonnet-20241022` | Claude model |
+| Gemini API Key | — | Google Gemini API key |
+| Gemini Model | `gemini-2.5-flash` | Gemini model |
+| Last.fm API Key | — | Last.fm API key (free, improves popularity) |
+| Scan Interval | `6` hours | How often to auto-scan the library |
 
 ## Networking
 
@@ -75,6 +88,8 @@ NaviCraft runs in Docker bridge mode by default. This means:
 - If both NaviCraft and your media server are on the **same custom Docker network**, you can use the container name instead (e.g., `http://navidrome:4533`)
 
 Connection status for each configured server is shown in the NaviCraft header with a green/red dot. Click to retest. When both servers are configured, a toggle lets you choose which server to save playlists to.
+
+> **Tip:** After updating server URLs in the Settings panel, click the status dots to retest the connections immediately.
 
 ## API Keys
 
@@ -97,13 +112,13 @@ docker logs -f navicraft
 ## Troubleshooting
 
 **Navidrome shows red in the UI:**
-- Verify `NAVIDROME_URL` uses your Unraid IP, not `localhost`
+- Open Settings (gear icon) and verify the Navidrome URL uses your Unraid IP, not `localhost`
 - Confirm Navidrome is running: `docker ps | grep navidrome`
 - Test from the host: `curl http://192.168.1.100:4533/rest/ping?u=admin&p=pass&v=1.16.1&c=test&f=json`
 
 **Plex shows red in the UI:**
-- Verify `PLEX_URL` uses your Unraid IP and correct port (default 32400)
-- Verify `PLEX_TOKEN` is correct (tokens can expire if you change your Plex password)
+- Open Settings (gear icon) and verify the Plex URL uses your Unraid IP and correct port (default 32400)
+- Verify the Plex Token is correct (tokens can expire if you change your Plex password)
 - Confirm Plex is running: `docker ps | grep plex`
 
 **Library not scanning:**
@@ -116,5 +131,6 @@ docker logs -f navicraft
 
 **AI generation failing:**
 - Check logs for the actual error: `docker logs navicraft | grep ERROR`
-- For Claude: verify API key and account has credits at console.anthropic.com
-- For Gemini: verify API key is valid
+- Open Settings (gear icon) and verify the API key for your selected provider is correct
+- For Claude: verify account has credits at console.anthropic.com
+- For Gemini: verify API key is valid at aistudio.google.com

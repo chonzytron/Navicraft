@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from config import config
+from config import config, EDITABLE_FIELDS, SECRET_FIELDS
 import database as db
 import scanner
 import navidrome
@@ -157,6 +157,33 @@ async def test_plex():
         return await plex.test_connection()
     except Exception as e:
         raise HTTPException(502, detail=f"Cannot connect to Plex: {e}")
+
+
+@app.get("/api/config")
+async def get_config():
+    """Return current editable config (secrets masked)."""
+    return config.get_editable()
+
+
+@app.put("/api/config")
+async def update_config(body: dict):
+    """Update config and persist to disk."""
+    # Validate only editable fields
+    invalid = [k for k in body if k not in EDITABLE_FIELDS]
+    if invalid:
+        raise HTTPException(400, detail=f"Unknown config fields: {', '.join(invalid)}")
+    if "ai_provider" in body and body["ai_provider"] not in ("claude", "gemini"):
+        raise HTTPException(400, detail="ai_provider must be 'claude' or 'gemini'")
+    if "scan_interval_hours" in body:
+        try:
+            val = int(body["scan_interval_hours"])
+            if val < 1 or val > 168:
+                raise ValueError
+            body["scan_interval_hours"] = str(val)
+        except (ValueError, TypeError):
+            raise HTTPException(400, detail="scan_interval_hours must be 1–168")
+    config.update_from_dict(body)
+    return {"status": "ok", "config": config.get_editable()}
 
 
 @app.get("/api/servers")

@@ -155,6 +155,29 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .scan-bar .spinner{width:14px;height:14px;margin:0;border-width:2px}
 .scan-pct{font-family:var(--mono);color:var(--text-4);font-size:11px}
 
+/* --- Config button --- */
+.cfg-btn{background:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px;cursor:pointer;color:var(--text-4);display:grid;place-items:center;transition:all .2s;line-height:0}
+.cfg-btn:hover{color:var(--text-2);border-color:var(--border-hover);transform:rotate(30deg)}
+
+/* --- Config modal --- */
+.cfg-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;place-items:center;backdrop-filter:blur(4px)}
+.cfg-overlay.on{display:grid}
+.cfg-modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:90%;max-width:480px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 24px 64px #000a}
+.cfg-header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border)}
+.cfg-header h2{font-size:16px;font-weight:600}
+.cfg-close{background:none;border:none;color:var(--text-3);font-size:22px;cursor:pointer;padding:0 4px;line-height:1}
+.cfg-close:hover{color:var(--text)}
+.cfg-body{flex:1;overflow-y:auto;padding:16px 22px}
+.cfg-section{margin-bottom:20px}
+.cfg-section:last-child{margin-bottom:0}
+.cfg-section h3{font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.8px;color:var(--text-4);margin-bottom:10px}
+.cfg-field{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.cfg-field span{font-size:13px;color:var(--text-3);min-width:110px;flex-shrink:0}
+.cfg-field input,.cfg-field select{flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none;min-width:0}
+.cfg-field input:focus,.cfg-field select:focus{border-color:var(--border-focus)}
+.cfg-field select{cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23606078' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;padding-right:28px}
+.cfg-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 22px;border-top:1px solid var(--border)}
+
 /* --- Toast --- */
 .toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;font-size:14px;font-weight:500;color:#fff;transform:translateY(60px);opacity:0;transition:all .3s var(--ease);z-index:99;max-width:400px}
 .toast.show{transform:translateY(0);opacity:1}

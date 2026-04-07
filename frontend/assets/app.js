@@ -390,6 +390,56 @@ function pollEnrichment(){
   enrichTimer=setInterval(check,15000);
 }
 
+// --- Config modal ---
+const cfgFieldMap={
+  navidrome_url:'cfgNavidromeUrl',
+  navidrome_user:'cfgNavidromeUser',
+  navidrome_password:'cfgNavidromePassword',
+  plex_url:'cfgPlexUrl',
+  plex_token:'cfgPlexToken',
+  ai_provider:'cfgAiProvider',
+  claude_api_key:'cfgClaudeApiKey',
+  claude_model:'cfgClaudeModel',
+  gemini_api_key:'cfgGeminiApiKey',
+  gemini_model:'cfgGeminiModel',
+  lastfm_api_key:'cfgLastfmApiKey',
+  scan_interval_hours:'cfgScanIntervalHours',
+};
+
+async function openConfig(){
+  try{
+    const cfg=await api('/config');
+    for(const[key,elId]of Object.entries(cfgFieldMap)){
+      const el=$('#'+elId);
+      if(el)el.value=cfg[key]||'';
+    }
+  }catch(e){toast('Failed to load config','error');return}
+  $('#cfgOverlay').classList.add('on');
+}
+
+function closeConfig(){
+  $('#cfgOverlay').classList.remove('on');
+}
+
+async function saveConfig(){
+  const body={};
+  for(const[key,elId]of Object.entries(cfgFieldMap)){
+    const el=$('#'+elId);
+    if(el)body[key]=el.value;
+  }
+  try{
+    await api('/config',{method:'PUT',body:JSON.stringify(body)});
+    toast('Settings saved','success');
+    closeConfig();
+    // Reload server status and providers with new config
+    loadServers();
+    loadProviders();
+  }catch(e){toast(`Save failed: ${e.message}`,'error')}
+}
+
+// Close modal on Escape
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeConfig()});
+
 // Enter = generate (Shift+Enter = newline)
 $('#prompt').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();generate()}

@@ -21,6 +21,12 @@
       <h1>Navi<span>Craft</span></h1>
     </div>
     <div class="srv-status">
+      <button class="cfg-btn" onclick="openConfig()" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
       <div class="nd-pill" id="ndBar" onclick="testServer('navidrome')" title="Click to retest">
         <div class="nd-dot" id="ndDot"></div>
         <span id="ndMsg">Navidrome</span>
@@ -135,6 +141,88 @@
     </div>
   </div>
 
+</div>
+
+<!-- Config Modal -->
+<div class="cfg-overlay" id="cfgOverlay" onclick="closeConfig()">
+  <div class="cfg-modal" onclick="event.stopPropagation()">
+    <div class="cfg-header">
+      <h2>Settings</h2>
+      <button class="cfg-close" onclick="closeConfig()">&times;</button>
+    </div>
+    <div class="cfg-body">
+      <div class="cfg-section">
+        <h3>Navidrome</h3>
+        <label class="cfg-field">
+          <span>URL</span>
+          <input type="text" id="cfgNavidromeUrl" placeholder="http://localhost:4533">
+        </label>
+        <label class="cfg-field">
+          <span>User</span>
+          <input type="text" id="cfgNavidromeUser" placeholder="admin">
+        </label>
+        <label class="cfg-field">
+          <span>Password</span>
+          <input type="password" id="cfgNavidromePassword" placeholder="••••">
+        </label>
+      </div>
+      <div class="cfg-section">
+        <h3>Plex / Plexamp</h3>
+        <label class="cfg-field">
+          <span>URL</span>
+          <input type="text" id="cfgPlexUrl" placeholder="http://localhost:32400">
+        </label>
+        <label class="cfg-field">
+          <span>Token</span>
+          <input type="password" id="cfgPlexToken" placeholder="••••">
+        </label>
+      </div>
+      <div class="cfg-section">
+        <h3>AI Provider</h3>
+        <label class="cfg-field">
+          <span>Provider</span>
+          <select id="cfgAiProvider">
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </label>
+        <label class="cfg-field">
+          <span>Claude API Key</span>
+          <input type="password" id="cfgClaudeApiKey" placeholder="sk-ant-...">
+        </label>
+        <label class="cfg-field">
+          <span>Claude Model</span>
+          <input type="text" id="cfgClaudeModel" placeholder="claude-3-5-sonnet-20241022">
+        </label>
+        <label class="cfg-field">
+          <span>Gemini API Key</span>
+          <input type="password" id="cfgGeminiApiKey" placeholder="••••">
+        </label>
+        <label class="cfg-field">
+          <span>Gemini Model</span>
+          <input type="text" id="cfgGeminiModel" placeholder="gemini-2.5-flash">
+        </label>
+      </div>
+      <div class="cfg-section">
+        <h3>Enrichment</h3>
+        <label class="cfg-field">
+          <span>Last.fm API Key</span>
+          <input type="password" id="cfgLastfmApiKey" placeholder="••••">
+        </label>
+      </div>
+      <div class="cfg-section">
+        <h3>Scanner</h3>
+        <label class="cfg-field">
+          <span>Scan Interval (hours)</span>
+          <input type="number" id="cfgScanIntervalHours" min="1" max="168" placeholder="6">
+        </label>
+      </div>
+    </div>
+    <div class="cfg-footer">
+      <button class="btn btn-ghost" onclick="closeConfig()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveConfig()">Save</button>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>

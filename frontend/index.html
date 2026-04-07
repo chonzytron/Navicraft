@@ -179,13 +179,6 @@
       <div class="cfg-section">
         <h3>AI Provider</h3>
         <label class="cfg-field">
-          <span>Provider</span>
-          <select id="cfgAiProvider">
-            <option value="claude">Claude</option>
-            <option value="gemini">Gemini</option>
-          </select>
-        </label>
-        <label class="cfg-field">
           <span>Claude API Key</span>
           <input type="password" id="cfgClaudeApiKey" placeholder="sk-ant-...">
         </label>
@@ -213,7 +206,7 @@
         <h3>Scanner</h3>
         <label class="cfg-field">
           <span>Scan Interval (hours)</span>
-          <input type="number" id="cfgScanIntervalHours" min="1" max="168" placeholder="6">
+          <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgScanIntervalHours" placeholder="6" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
         </label>
       </div>
     </div>

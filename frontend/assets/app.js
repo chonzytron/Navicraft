@@ -402,7 +402,6 @@ const cfgFieldMap={
   navidrome_password:'cfgNavidromePassword',
   plex_url:'cfgPlexUrl',
   plex_token:'cfgPlexToken',
-  ai_provider:'cfgAiProvider',
   claude_api_key:'cfgClaudeApiKey',
   claude_model:'cfgClaudeModel',
   gemini_api_key:'cfgGeminiApiKey',

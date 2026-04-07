@@ -43,7 +43,7 @@ Respond ONLY with a JSON object (no markdown, no backticks):
 Rules:
 - genres: select broadly — include related/adjacent genres. If the prompt is about mood rather than genre, include genres that typically carry that mood.
 - artists: only include if the prompt implies specific artists or very specific styles. Leave empty for open-ended prompts.
-- years: set range if the prompt implies an era. Use null for no constraint.
+- years: set range if the prompt implies an era. Use null for no constraint. The year field represents the ORIGINAL release year of the song, not any compilation or re-issue date. So "best of the 90s" means year_min=1990, year_max=1999.
 - moods: include if mood tags might exist (e.g. "chill", "energetic", "melancholy", "dark", "uplifting")
 - bpm: set range if tempo matters (workout=120-160, chill=60-100, etc). Use null otherwise.
 - keywords: additional terms that might appear in song titles, comments, or album names
@@ -70,6 +70,7 @@ Rules:
 - Order songs for good flow — consider energy arc, key, tempo, and transitions
 - Mix artists — don't cluster songs by the same artist unless the prompt asks for it
 - You MUST return EXACTLY the number of songs requested. If the user asks for 30 songs, return exactly 30 — not 20, not 25, but exactly 30. Only return fewer if there aren't enough candidates.
+- If a target duration is specified, it OVERRIDES the exact song count. Pick songs until the total duration falls within the specified range (±5 minutes of the target). Use the duration field (m:ss format) to track the running total as you select songs.
 - If few candidates match, include what fits and explain in the description
 - STRONGLY prefer songs with higher popularity scores (pop column, 0-100). These are well-known, beloved tracks that listeners are more likely to enjoy. Avoid obscure deep cuts unless the prompt specifically asks for hidden gems or rare tracks.
 - Aim for a playlist that a typical fan of the genre/mood would recognize and enjoy
@@ -265,7 +266,12 @@ async def pass2_select_songs(
 
     duration_note = ""
     if target_duration_min:
-        duration_note = f"\nTarget total playlist duration: approximately {target_duration_min} minutes."
+        duration_note = (
+            f"\nTarget total playlist duration: {target_duration_min} minutes "
+            f"(must be between {target_duration_min - 5} and {target_duration_min + 5} minutes). "
+            f"Use the duration column (m:ss) for each candidate to calculate the running total as you pick songs. "
+            f"Stop adding songs once the total is within this range."
+        )
 
     user_msg = f"""Playlist prompt: "{prompt}"
 

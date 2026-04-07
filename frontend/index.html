@@ -16,26 +16,28 @@
 
   <!-- Header -->
   <header>
-    <div class="logo">
-      <div class="logo-mark" onclick="triggerScan()" title="Click to rescan library">&#9835;</div>
-      <h1>Navi<span>Craft</span></h1>
-    </div>
-    <div class="srv-status">
-      <button class="cfg-btn" onclick="openConfig()" title="Settings">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
-      <div class="nd-pill" id="ndBar" onclick="testServer('navidrome')" title="Click to retest">
-        <div class="nd-dot" id="ndDot"></div>
-        <span id="ndMsg">Navidrome</span>
+    <div class="header-left">
+      <div class="logo">
+        <div class="logo-mark" onclick="triggerScan()" title="Click to rescan library">&#9835;</div>
+        <h1>Navi<span>Craft</span></h1>
       </div>
-      <div class="nd-pill" id="plexBar" onclick="testServer('plex')" title="Click to retest" style="display:none">
-        <div class="nd-dot" id="plexDot"></div>
-        <span id="plexMsg">Plex</span>
+      <div class="srv-status">
+        <div class="nd-pill" id="ndBar" onclick="testServer('navidrome')" title="Click to retest">
+          <div class="nd-dot" id="ndDot"></div>
+          <span id="ndMsg">Navidrome</span>
+        </div>
+        <div class="nd-pill" id="plexBar" onclick="testServer('plex')" title="Click to retest" style="display:none">
+          <div class="nd-dot" id="plexDot"></div>
+          <span id="plexMsg">Plex</span>
+        </div>
       </div>
     </div>
+    <button class="cfg-btn" onclick="openConfig()" title="Settings">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
   </header>
 
   <!-- Scan Progress Bar -->
@@ -103,12 +105,6 @@
             </button>
           </div>
         </div>
-        <div class="srv-wrap" id="srvWrap">
-          <div class="srv-pills">
-            <button class="srv-btn" id="srvNavidrome" onclick="setServer('navidrome')">Navidrome</button>
-            <button class="srv-btn" id="srvPlex" onclick="setServer('plex')">Plex</button>
-          </div>
-        </div>
       </div>
       <button class="btn-gen" id="genBtn" onclick="generate()">Generate</button>
     </div>
@@ -125,7 +121,6 @@
   <div class="results" id="results">
     <div class="res-top">
       <div class="res-name" id="plName"></div>
-      <div class="saved-pill" id="savedPill" style="display:none">&#10003; Saved</div>
     </div>
     <div class="res-desc" id="plDesc"></div>
     <div class="res-meta">
@@ -135,8 +130,12 @@
     </div>
     <ul class="songs" id="songList"></ul>
     <div class="res-actions">
-      <button class="btn btn-primary" id="saveBtn" onclick="savePlaylist()">Save to Server</button>
-      <button class="btn btn-ghost" onclick="exportM3U()">Export .m3u</button>
+      <div class="export-group" id="exportGroup">
+        <button class="btn btn-primary" id="saveNavidromeBtn" onclick="saveToServer('navidrome')" style="display:none">Save to Navidrome</button>
+        <button class="btn btn-primary" id="savePlexBtn" onclick="saveToServer('plex')" style="display:none">Save to Plex</button>
+        <button class="btn btn-ghost" onclick="exportM3U()">Export .m3u</button>
+      </div>
+      <div class="saved-pills" id="savedPills" style="display:none"></div>
       <button class="btn btn-ghost" onclick="reset()">New playlist</button>
     </div>
   </div>

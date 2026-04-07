@@ -56,11 +56,6 @@ async function loadServers(){
     $('#ndBar').style.display=hasND?'':'none';
     $('#plexBar').style.display=hasPlex?'':'none';
 
-    // Show server selector only when both are configured
-    if(hasND&&hasPlex){
-      $('#srvWrap').classList.add('on');
-    }
-
     // Set default active server and test configured servers
     if(hasND){
       setServer('navidrome');
@@ -77,14 +72,7 @@ async function loadServers(){
 
 function setServer(id){
   activeServer=id;
-  $('#srvNavidrome').classList.toggle('on',id==='navidrome');
-  $('#srvPlex').classList.toggle('on',id==='plex');
-  // Update save button label
-  const label=id==='plex'?'Save to Plex':'Save to Navidrome';
-  $('#saveBtn').textContent=label;
 }
-
-function serverLabel(){return activeServer==='plex'?'Plex':'Navidrome'}
 
 async function testServer(id){
   if(id==='plex'){
@@ -198,7 +186,7 @@ function phaseLabel(phase){
     broadening:'Broadening search...',
     pass2:'Pass 2: AI is selecting songs...',
     matching:'Building playlist...',
-    saving:`Saving to ${serverLabel()}...`,
+    saving:'Saving to server...',
   };
   return labels[phase]||null;
 }
@@ -310,10 +298,21 @@ function renderResults(r){
     list.appendChild(li);
   });
 
+  // Show save buttons for available servers
+  const hasND=availableServers.some(sv=>sv.id==='navidrome');
+  const hasPlex=availableServers.some(sv=>sv.id==='plex');
+  $('#saveNavidromeBtn').style.display=hasND?'':'none';
+  $('#savePlexBtn').style.display=hasPlex?'':'none';
+  $('#savedPills').style.display='none';
+  $('#savedPills').innerHTML='';
+
   if(r.created){
-    $('#savedPill').style.display='';$('#saveBtn').style.display='none';
-  }else{
-    $('#savedPill').style.display='none';$('#saveBtn').style.display='';
+    // Auto-saved to the server that was used during generation
+    const label=activeServer==='plex'?'Plex':'Navidrome';
+    $('#savedPills').innerHTML=`<div class="saved-pill">&#10003; Saved to ${esc(label)}</div>`;
+    $('#savedPills').style.display='';
+    if(activeServer==='navidrome')$('#saveNavidromeBtn').style.display='none';
+    if(activeServer==='plex')$('#savePlexBtn').style.display='none';
   }
 
   $('#results').classList.add('on');
@@ -321,17 +320,23 @@ function renderResults(r){
 }
 
 // --- Save ---
-async function savePlaylist(){
+async function saveToServer(server){
   if(!currentResult||!currentResult.songs.length)return;
-  if(!activeServer){toast('No media server configured','error');return}
-  const idField=activeServer==='plex'?'plex_id':'navidrome_id';
+  const idField=server==='plex'?'plex_id':'navidrome_id';
   const ids=currentResult.songs.map(s=>s[idField]).filter(Boolean);
-  const label=serverLabel();
+  const label=server==='plex'?'Plex':'Navidrome';
   if(!ids.length){toast(`No ${label} IDs — verify server connection and trigger a scan`,'error');return}
   try{
-    await api('/playlists',{method:'POST',body:JSON.stringify({name:currentResult.name,song_ids:ids,server:activeServer})});
+    await api('/playlists',{method:'POST',body:JSON.stringify({name:currentResult.name,song_ids:ids,server:server})});
     toast(`Playlist saved to ${label}!`,'success');
-    $('#savedPill').style.display='';$('#saveBtn').style.display='none';
+    // Hide the button for this server and show saved pill
+    const btn=server==='plex'?$('#savePlexBtn'):$('#saveNavidromeBtn');
+    btn.style.display='none';
+    const pill=document.createElement('div');
+    pill.className='saved-pill';
+    pill.innerHTML=`&#10003; Saved to ${esc(label)}`;
+    $('#savedPills').appendChild(pill);
+    $('#savedPills').style.display='';
   }catch(e){toast(`Save failed: ${e.message}`,'error')}
 }
 

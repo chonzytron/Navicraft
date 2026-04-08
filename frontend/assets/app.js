@@ -381,9 +381,9 @@ function pollEnrichment(){
       const incomplete=s.remaining>0||s.deezer_missing>0||s.lastfm_missing>0||s.musicbrainz_missing>0;
       if(incomplete){
         $('#enrichBar').classList.add('on');
-        const dzPct=s.deezer_percent??0;
-        const lfPct=s.lastfm_percent??0;
-        const mbPct=s.musicbrainz_percent??0;
+        const dzPct=Math.round(s.deezer_percent??0);
+        const lfPct=Math.round(s.lastfm_percent??0);
+        const mbPct=Math.round(s.musicbrainz_percent??0);
         $('#enrichFillDeezer').style.width=`${dzPct}%`;
         $('#enrichTextDeezer').textContent=`${dzPct}%`;
         $('#enrichFillLastfm').style.width=`${lfPct}%`;
@@ -401,24 +401,23 @@ function pollEnrichment(){
 
 // --- Mood scan progress ---
 let moodTimer=null;
-function _updateMoodPlayBtn(continuous){
-  $('#moodPlayIcon').style.display=continuous?'none':'';
-  $('#moodPauseIcon').style.display=continuous?'':'none';
-  $('#moodPlayBtn').title=continuous?'Pause continuous scan':'Run continuously';
-}
-
 function _updateMoodUI(s){
-  const pct=s.percent??0;
+  const pct=Math.round(s.percent??0);
   const incomplete=s.remaining>0;
   if(incomplete||s.running||s.continuous){
     $('#moodBar').classList.add('on');
     $('#moodFill').style.width=`${pct}%`;
     $('#moodText').textContent=`${pct}%`;
-    _updateMoodPlayBtn(s.continuous);
   }else{
     $('#moodBar').classList.remove('on');
-    _updateMoodPlayBtn(false);
   }
+  $('#moodLabel').classList.toggle('active',!!s.continuous);
+  $('#moodLabel').title=s.continuous?'Click to pause':'Click to start continuous scanning';
+}
+
+function _syncMoodFields(){
+  const on=$('#cfgMoodScanEnabled').classList.contains('on');
+  $('#moodScheduleFields').classList.toggle('disabled',!on);
 }
 
 function pollMoodScan(){
@@ -434,8 +433,7 @@ function pollMoodScan(){
 }
 
 async function toggleContinuousMood(){
-  // Check current state from the icon visibility
-  const isPlaying=$('#moodPauseIcon').style.display!=='none';
+  const isPlaying=$('#moodLabel').classList.contains('active');
   const action=isPlaying?'stop':'start';
   try{
     await api('/mood/continuous',{method:'POST',body:JSON.stringify({action})});
@@ -470,7 +468,6 @@ const cfgFieldMap={
   gemini_model:'cfgGeminiModel',
   lastfm_api_key:'cfgLastfmApiKey',
   scan_interval_hours:'cfgScanIntervalHours',
-  mood_scan_batch_size:'cfgMoodScanBatchSize',
 };
 // Select-based fields (use .value like inputs but are <select> elements)
 const cfgSelectMap={
@@ -513,6 +510,7 @@ async function openConfig(){
       if(el)el.classList.toggle('on',cfg[key]==='true');
     }
   }catch(e){toast('Failed to load config','error');return}
+  _syncMoodFields();
   $('#cfgOverlay').classList.add('on');
 }
 

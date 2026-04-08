@@ -186,14 +186,6 @@ async def update_config(body: dict):
     if "mood_scan_enabled" in body:
         if body["mood_scan_enabled"] not in ("true", "false", True, False):
             raise HTTPException(400, detail="mood_scan_enabled must be 'true' or 'false'")
-    if "mood_scan_batch_size" in body:
-        try:
-            val = int(body["mood_scan_batch_size"])
-            if val < 1 or val > 500:
-                raise ValueError
-            body["mood_scan_batch_size"] = str(val)
-        except (ValueError, TypeError):
-            raise HTTPException(400, detail="mood_scan_batch_size must be 1–500")
     if "timezone" in body:
         try:
             from zoneinfo import ZoneInfo
@@ -327,17 +319,17 @@ async def popularity_status():
         "total": total,
         "enriched": enriched,
         "remaining": remaining,
-        "percent": round(enriched / total * 100, 1) if total > 0 else 0,
+        "percent": round(enriched / total * 100) if total > 0 else 0,
         "running": _enrichment_running,
         "deezer_enriched": deezer_enriched,
         "deezer_missing": deezer_missing,
-        "deezer_percent": round(deezer_enriched / total * 100, 1) if total > 0 else 0,
+        "deezer_percent": round(deezer_enriched / total * 100) if total > 0 else 0,
         "lastfm_enriched": lastfm_enriched,
         "lastfm_missing": lastfm_missing,
-        "lastfm_percent": round(lastfm_enriched / total * 100, 1) if total > 0 else 0,
+        "lastfm_percent": round(lastfm_enriched / total * 100) if total > 0 else 0,
         "musicbrainz_enriched": mb_enriched,
         "musicbrainz_missing": mb_missing,
-        "musicbrainz_percent": round(mb_enriched / total * 100, 1) if total > 0 else 0,
+        "musicbrainz_percent": round(mb_enriched / total * 100) if total > 0 else 0,
     }
 
 
@@ -379,7 +371,8 @@ async def mood_scan_status():
         "scanned": scanned,
         "remaining": remaining,
         "tagged": tagged,
-        "percent": round(scanned / total * 100, 1) if total > 0 else 0,
+        "percent": round(scanned / total * 100) if total > 0 else 0,
+        "enabled": config.mood_scan_enabled,
         "running": progress.get("running", False),
         "continuous": mood_scanner.is_continuous(),
         "message": progress.get("message", ""),

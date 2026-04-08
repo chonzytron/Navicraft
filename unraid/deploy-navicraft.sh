@@ -38,7 +38,9 @@ MAX_CANDIDATES="500"
 # Docker image (use ghcr.io for pre-built, or build locally)
 DOCKER_IMAGE="ghcr.io/chonzytron/navicraft:latest"
 
-# Set to "true" to build from source instead of pulling the image
+# Set to "true" to build from source instead of pulling the image.
+# Building from source includes essentia-tensorflow for mood/theme audio analysis.
+# If mood scanning logs "essentia-tensorflow not installed", rebuild to pick up the fix.
 BUILD_FROM_SOURCE="false"
 SOURCE_PATH="/mnt/user/appdata/navicraft/source"
 

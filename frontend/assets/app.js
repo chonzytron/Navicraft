@@ -407,11 +407,19 @@ function pollMoodScan(){
     try{
       const s=await api('/mood/status');
       const incomplete=s.remaining>0;
-      if(incomplete){
+      if(incomplete||s.running){
         $('#moodBar').classList.add('on');
         const pct=s.percent??0;
         $('#moodFill').style.width=`${pct}%`;
-        $('#moodText').textContent=s.running?`${pct}% (${s.message})`:`${pct}%`;
+        if(s.running){
+          $('#moodText').textContent=`${pct}%`;
+          $('#moodScanBtn').disabled=true;
+          $('#moodScanBtn').textContent='Scanning...';
+        }else{
+          $('#moodText').textContent=`${pct}% (${s.remaining} left)`;
+          $('#moodScanBtn').disabled=false;
+          $('#moodScanBtn').textContent='Scan';
+        }
       }else{
         $('#moodBar').classList.remove('on');
       }
@@ -419,6 +427,41 @@ function pollMoodScan(){
   };
   check();
   moodTimer=setInterval(check,15000);
+}
+
+async function triggerMoodScan(){
+  try{
+    $('#moodScanBtn').disabled=true;
+    $('#moodScanBtn').textContent='Starting...';
+    await api('/mood/scan',{method:'POST'});
+    toast('Mood scan started','info');
+    // Poll more frequently while running
+    if(moodTimer)clearInterval(moodTimer);
+    const fastPoll=setInterval(async()=>{
+      try{
+        const s=await api('/mood/status');
+        const pct=s.percent??0;
+        $('#moodBar').classList.add('on');
+        $('#moodFill').style.width=`${pct}%`;
+        if(s.running){
+          $('#moodText').textContent=`${pct}%`;
+          $('#moodScanBtn').disabled=true;
+          $('#moodScanBtn').textContent='Scanning...';
+        }else{
+          $('#moodText').textContent=s.remaining>0?`${pct}% (${s.remaining} left)`:`${pct}%`;
+          $('#moodScanBtn').disabled=false;
+          $('#moodScanBtn').textContent='Scan';
+          clearInterval(fastPoll);
+          pollMoodScan(); // resume normal polling
+          if(!s.remaining)$('#moodBar').classList.remove('on');
+        }
+      }catch{clearInterval(fastPoll);pollMoodScan()}
+    },3000);
+  }catch(e){
+    toast(`Mood scan failed: ${e.message}`,'error');
+    $('#moodScanBtn').disabled=false;
+    $('#moodScanBtn').textContent='Scan';
+  }
 }
 
 // --- Config modal ---

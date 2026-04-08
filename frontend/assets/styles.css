@@ -116,6 +116,9 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .enrich-fill.musicbrainz{background:#ba478f}
 .enrich-fill.mood-scan{background:#e8a317}
 .enrich-pct{width:38px;text-align:right;flex-shrink:0}
+.mood-scan-btn{font-family:var(--mono);font-size:10px;padding:1px 8px;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--text-3);cursor:pointer;flex-shrink:0;transition:border-color .2s,color .2s}
+.mood-scan-btn:hover{border-color:var(--border-hover);color:var(--text)}
+.mood-scan-btn:disabled{opacity:.4;cursor:default}
 
 /* --- Media server status --- */
 .srv-status{display:flex;align-items:center;gap:12px;padding-left:54px}

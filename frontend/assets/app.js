@@ -435,6 +435,8 @@ function pollMoodScan(){
 async function toggleContinuousMood(){
   const isPlaying=$('#moodLabel').classList.contains('active');
   const action=isPlaying?'stop':'start';
+  // Immediate visual feedback
+  $('#moodLabel').classList.toggle('active',!isPlaying);
   try{
     await api('/mood/continuous',{method:'POST',body:JSON.stringify({action})});
     toast(action==='start'?'Continuous mood scan started':'Continuous mood scan paused','info');
@@ -451,6 +453,8 @@ async function toggleContinuousMood(){
       }catch{clearInterval(fastPoll);pollMoodScan()}
     },3000);
   }catch(e){
+    // Revert on failure
+    $('#moodLabel').classList.toggle('active',isPlaying);
     toast(`Failed: ${e.message}`,'error');
   }
 }

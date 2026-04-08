@@ -21,6 +21,21 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
+
+def _strip_scores(tag_string: str) -> str:
+    """Strip confidence scores from scored tag strings for compact AI display.
+    'happy:0.85, energetic:0.72' -> 'happy, energetic'
+    Also handles legacy format without scores."""
+    if not tag_string:
+        return ""
+    parts = []
+    for part in tag_string.split(", "):
+        tag_name = part.split(":")[0].strip()
+        if tag_name:
+            parts.append(tag_name)
+    return ", ".join(parts)
+
+
 # --- Prompts ---
 
 PASS1_SYSTEM = """You are a music analysis AI. Given a user's playlist prompt and a summary of their music library, extract structured search filters that will help find matching songs.
@@ -44,7 +59,7 @@ Rules:
 - genres: select broadly — include related/adjacent genres. If the prompt is about mood rather than genre, include genres that typically carry that mood.
 - artists: only include if the prompt implies specific artists or very specific styles. Leave empty for open-ended prompts.
 - years: set range if the prompt implies an era. Use null for no constraint. The year field represents the ORIGINAL release year of the song, not any compilation or re-issue date. So "best of the 90s" means year_min=1990, year_max=1999.
-- moods: include if mood or theme tags might exist. Mood tags describe emotional qualities (e.g. "happy", "sad", "energetic", "calm", "dark", "melancholic", "uplifting", "romantic"). Theme tags describe context/setting (e.g. "party", "film", "nature", "summer", "sport", "travel", "christmas"). Include BOTH mood and theme terms — they are searched in the same filter.
+- moods: ONLY use tags from the standardized vocabulary provided in the library summary. These are Essentia-classified audio mood/theme tags. Map the user's natural language to the closest matching standard tags. Do NOT invent mood terms outside this vocabulary — unrecognized terms will match nothing.
 - bpm: set range if tempo matters (workout=120-160, chill=60-100, etc). Use null otherwise.
 - keywords: additional terms that might appear in song titles, comments, or album names
 - exclude_genres: if the prompt says "NOT" or "no" or "without" a genre, put it here (e.g. "jazz but NOT smooth jazz" → exclude_genres: ["smooth jazz"])
@@ -55,7 +70,7 @@ Rules:
 
 PASS2_SYSTEM = """You are a music curator. Given a user's playlist prompt and a list of candidate songs from their library, select and order the final playlist.
 
-Candidates are provided in compact format: id;title;artist;album;genre;year;duration;bpm;mood;mood_tags;theme_tags;popularity
+Candidates are provided in compact format: id;title;artist;album;genre;year;duration;bpm;mood_tags;theme_tags;popularity
 
 Respond ONLY with a JSON object (no markdown, no backticks):
 {
@@ -213,20 +228,28 @@ async def _call_ai(system: str, user_message: str, provider: str | None = None) 
 async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str | None = None) -> dict:
     """
     Pass 1: Extract search filters from the user's prompt.
-    library_summary should contain: genres, top_artists, year_range
+    library_summary should contain: genres, top_artists, year_range, mood_tags, theme_tags
     """
-    # Combine all mood/theme sources into a single list for the AI
+    # Provide the full standardized Essentia vocabulary so the AI knows exactly what tags exist.
+    # Show which tags are actually present in the library (with counts) for context,
+    # plus the full vocabulary so the AI can map user intent to valid tags.
+    from mood_scanner import MOOD_CATEGORY, THEME_CATEGORY
     mood_tag_names = [t['tag'] for t in library_summary.get('mood_tags', [])[:30]]
     theme_tag_names = [t['tag'] for t in library_summary.get('theme_tags', [])[:30]]
-    file_mood_names = [m['mood'] for m in library_summary.get('moods', [])[:20]]
-    all_mood_labels = sorted(set(mood_tag_names + theme_tag_names + file_mood_names))
+    library_mood_labels = sorted(set(mood_tag_names + theme_tag_names))
+    full_vocabulary = sorted(MOOD_CATEGORY | THEME_CATEGORY)
+
+    mood_section = ""
+    if library_mood_labels:
+        mood_section = f"- Mood/theme tags in library: {', '.join(library_mood_labels)}\n"
+    mood_section += f"- Full standardized mood/theme vocabulary (ONLY use these): {', '.join(full_vocabulary)}"
 
     user_msg = f"""My music library contains:
 - Genres: {', '.join(library_summary.get('genres', [])[:80])}
 - Top artists ({library_summary.get('artist_count', 0)} total): {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:50])}
 - Years: {library_summary.get('year_range', {}).get('min_year', '?')} to {library_summary.get('year_range', {}).get('max_year', '?')}
 - Total songs: {library_summary.get('song_count', 0)}
-{f"- Available mood/theme tags: {', '.join(all_mood_labels)}" if all_mood_labels else ''}
+{mood_section}
 
 User's playlist prompt: "{prompt}"
 
@@ -256,6 +279,10 @@ async def pass2_select_songs(
         if c.get("duration") is not None:
             m, s = divmod(int(c["duration"]), 60)
             dur = f"{m}:{s:02d}"
+        # Strip confidence scores from mood/theme tags for compact display
+        # "happy:0.85, energetic:0.72" -> "happy, energetic"
+        mood_tags = _strip_scores(c.get("mood_tags") or "")
+        theme_tags = _strip_scores(c.get("theme_tags") or "")
         parts = [
             str(c["id"]),
             c["title"],
@@ -265,9 +292,8 @@ async def pass2_select_songs(
             str(c["year"]) if c.get("year") else "",
             dur,
             str(c["bpm"]) if c.get("bpm") else "",
-            c.get("mood") or "",
-            c.get("mood_tags") or "",
-            c.get("theme_tags") or "",
+            mood_tags,
+            theme_tags,
             str(c["popularity"]) if c.get("popularity") is not None else "",
         ]
         candidate_lines.append(";".join(parts))

@@ -233,7 +233,6 @@ async def library_stats():
     with db.get_db() as conn:
         stats = db.get_library_stats(conn)
         genres = db.get_genres(conn)
-        moods = db.get_moods(conn)
         year_range = db.get_year_range(conn)
         last_scan = db.get_last_scan(conn)
         mood_tag_summary = db.get_mood_tag_summary(conn)
@@ -242,7 +241,6 @@ async def library_stats():
     return {
         **stats,
         "genres": genres,
-        "moods": moods,
         "mood_tags": mood_tag_summary,
         "theme_tags": theme_tag_summary,
         "year_range": year_range,
@@ -492,7 +490,6 @@ async def generate_playlist(req: GenerateRequest):
                     "artist_count": stats["artist_count"],
                     "album_count": stats["album_count"],
                     "genres": [g["genre"] for g in db.get_genres(conn)],
-                    "moods": db.get_moods(conn),
                     "mood_tags": db.get_mood_tag_summary(conn),
                     "theme_tags": db.get_theme_tag_summary(conn),
                     "top_artists": db.get_top_artists(conn, limit=150),

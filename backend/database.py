@@ -239,18 +239,6 @@ def get_genres(db: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_moods(db: sqlite3.Connection) -> list[dict]:
-    """Get all mood tags with counts."""
-    rows = db.execute("""
-        SELECT mood, COUNT(*) as count
-        FROM tracks
-        WHERE mood IS NOT NULL AND mood != ''
-        GROUP BY mood
-        ORDER BY count DESC
-    """).fetchall()
-    return [dict(r) for r in rows]
-
-
 def get_top_artists(db: sqlite3.Connection, limit: int = 200) -> list[dict]:
     """Get top artists by track count."""
     rows = db.execute("""
@@ -308,12 +296,12 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
     if filters.get("moods"):
         moods = filters["moods"]
         mood_clauses = " OR ".join(
-            "(LOWER(mood) LIKE ? OR LOWER(mood_tags) LIKE ? OR LOWER(theme_tags) LIKE ?)"
+            "(LOWER(mood_tags) LIKE ? OR LOWER(theme_tags) LIKE ?)"
             for _ in moods
         )
         conditions.append(f"({mood_clauses})")
         for m in moods:
-            params.extend([f"%{m.lower()}%", f"%{m.lower()}%", f"%{m.lower()}%"])
+            params.extend([f"%{m.lower()}%", f"%{m.lower()}%"])
 
     if filters.get("bpm_min"):
         conditions.append("bpm >= ?")
@@ -694,19 +682,32 @@ def reset_mood_tags(db: sqlite3.Connection) -> int:
     return count
 
 
+def _parse_scored_tags(tag_string: str) -> list[str]:
+    """Parse a scored tag string like 'happy:0.85, energetic:0.72' into tag names.
+    Also handles legacy format without scores (e.g. 'happy, energetic')."""
+    tags = []
+    for part in tag_string.split(", "):
+        part = part.strip()
+        if not part:
+            continue
+        # Strip confidence score if present (e.g. "happy:0.85" -> "happy")
+        tag_name = part.split(":")[0].strip()
+        if tag_name:
+            tags.append(tag_name)
+    return tags
+
+
 def get_mood_tag_summary(db: sqlite3.Connection) -> list[dict]:
     """Get distinct mood tags with approximate counts.
-    Parses comma-separated mood_tags column in Python."""
+    Parses comma-separated mood_tags column (with optional confidence scores) in Python."""
     rows = db.execute("""
         SELECT mood_tags FROM tracks
         WHERE mood_tags IS NOT NULL AND mood_tags != ''
     """).fetchall()
     counts: dict[str, int] = {}
     for r in rows:
-        for tag in r["mood_tags"].split(", "):
-            tag = tag.strip()
-            if tag:
-                counts[tag] = counts.get(tag, 0) + 1
+        for tag in _parse_scored_tags(r["mood_tags"]):
+            counts[tag] = counts.get(tag, 0) + 1
     return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
 
 
@@ -718,10 +719,8 @@ def get_theme_tag_summary(db: sqlite3.Connection) -> list[dict]:
     """).fetchall()
     counts: dict[str, int] = {}
     for r in rows:
-        for tag in r["theme_tags"].split(", "):
-            tag = tag.strip()
-            if tag:
-                counts[tag] = counts.get(tag, 0) + 1
+        for tag in _parse_scored_tags(r["theme_tags"]):
+            counts[tag] = counts.get(tag, 0) + 1
     return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
 
 

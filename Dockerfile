@@ -8,9 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt
 
-# Install essentia-tensorflow (optional — mood scanning falls back to API-only if unavailable)
-RUN pip install --no-cache-dir essentia-tensorflow==2.1b6.dev1116 || \
-    echo "WARNING: essentia-tensorflow not available, mood audio analysis disabled"
+# Install essentia-tensorflow for mood/theme audio analysis
+# Uses pre-release builds from https://pypi.org/project/essentia-tensorflow/
+# Falls back gracefully to API-only tagging if unavailable (e.g. unsupported platform)
+RUN pip install --no-cache-dir essentia-tensorflow==2.1b6.dev1389 || \
+    echo "WARNING: essentia-tensorflow not available for this platform, mood audio analysis disabled"
 
 # Copy app
 COPY backend/ /app/

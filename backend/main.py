@@ -372,6 +372,7 @@ async def mood_scan_status():
         "remaining": remaining,
         "tagged": tagged,
         "percent": round(scanned / total * 100) if total > 0 else 0,
+        "enabled": config.mood_scan_enabled,
         "running": progress.get("running", False),
         "continuous": mood_scanner.is_continuous(),
         "message": progress.get("message", ""),

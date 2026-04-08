@@ -119,6 +119,10 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .mood-label{cursor:pointer;transition:color .2s}
 .mood-label:hover{color:var(--text-2)}
 .mood-label.active{color:#e8a317}
+.mood-sched-toggle{width:22px;height:12px;background:var(--surface-3);border-radius:6px;position:relative;cursor:pointer;flex-shrink:0;border:1px solid var(--border);transition:background .2s,border-color .2s}
+.mood-sched-toggle::after{content:'';width:8px;height:8px;border-radius:50%;background:var(--text-4);position:absolute;top:1px;left:1px;transition:all .2s}
+.mood-sched-toggle.on{background:var(--green);border-color:var(--green)}
+.mood-sched-toggle.on::after{left:11px;background:#fff}
 
 /* --- Media server status --- */
 .srv-status{display:flex;align-items:center;gap:12px;padding-left:54px}

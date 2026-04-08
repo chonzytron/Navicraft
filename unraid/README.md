@@ -77,9 +77,11 @@ These are set from the Settings panel in the web UI. They can also be pre-set as
 | Gemini Model | `gemini-2.5-flash` | Gemini model |
 | Last.fm API Key | — | Last.fm API key (free, improves popularity) |
 | Scan Interval | `6` hours | How often to auto-scan the library |
+| Timezone | `UTC` | IANA timezone for schedule window (e.g. `America/New_York`) |
 | Mood Scan Enabled | `false` | Enable Essentia-based mood/theme audio analysis |
 | Mood Scan Batch Size | `50` | Tracks to process per mood scan run |
-| Mood Scan Interval | `24` hours | Hours to wait between mood scan batches (starts after batch completes) |
+| Mood Scan From Hour | `0` (midnight) | Schedule window start hour (0–23) |
+| Mood Scan To Hour | `6` (6 AM) | Schedule window end hour (0–23) |
 
 ## Networking
 

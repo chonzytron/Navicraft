@@ -419,9 +419,12 @@ async def scan_mood_tags(batch_size: int | None = None) -> dict:
                 import essentia  # noqa: F401
                 import essentia.standard  # noqa: F401
                 has_essentia = True
-            except ImportError:
+            except Exception as exc:
                 has_essentia = False
-                logger.warning("essentia-tensorflow not installed — skipping audio analysis, using API tags only")
+                logger.warning(
+                    "essentia-tensorflow not available — skipping audio analysis, using API tags only. "
+                    "Install with: pip install --pre essentia-tensorflow==2.1b6.dev1389 — error: %s", exc
+                )
 
             # Download models if needed
             if has_essentia:

@@ -67,9 +67,8 @@ unraid/
 
 ```bash
 cd backend
-pip install -r requirements.txt
-# Optional: enable Essentia audio analysis for mood/theme tagging
-pip install essentia-tensorflow==2.1b6.dev1389
+# --pre is required because essentia-tensorflow uses pre-release versioning
+pip install --pre -r requirements.txt
 export MUSIC_DIR=/path/to/music
 uvicorn main:app --reload --port 8085
 ```
@@ -183,7 +182,7 @@ docker compose up -d --build
 - Media server ID sync requires Navidrome/Plex to be running and accessible at the configured URL
 - SQLite DB persists at `DB_PATH` (default `/data/navicraft.db`)
 - Popularity enrichment runs in the background every 2 minutes (500 track batches)
-- Mood scanning requires `essentia-tensorflow` (`pip install essentia-tensorflow==2.1b6.dev1389`). Models (~80MB) auto-download on first run. CPU-heavy (~2-5s per track). Falls back to API-only tagging if not installed.
+- Mood scanning requires `essentia-tensorflow` (`pip install --pre essentia-tensorflow==2.1b6.dev1389`). The `--pre` flag is required because the package uses pre-release versioning. Models (~80MB) auto-download on first run. CPU-heavy (~2-5s per track). Falls back to API-only tagging if not installed.
 - In Docker on Unraid, `NAVIDROME_URL` must use the host IP, not `localhost`
 
 ## Code Style

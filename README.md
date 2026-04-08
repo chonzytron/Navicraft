@@ -158,12 +158,18 @@ NaviCraft can analyze your audio files locally to classify tracks into **mood ta
 
 **Setup:**
 
-Docker users get Essentia automatically — the Docker image includes `essentia-tensorflow`. If you see the warning `essentia-tensorflow not installed — skipping audio analysis, using API tags only` in your logs, rebuild the image (`docker compose up -d --build`) to pick up the latest Dockerfile which fixes the package version.
+Docker users get Essentia automatically — the Docker image includes `essentia-tensorflow`. If you see the warning `essentia-tensorflow not available` in your logs, rebuild the image (`docker compose up -d --build`) to pick up the fix.
 
-For local (non-Docker) development, install the optional dependency:
+For local (non-Docker) development, `essentia-tensorflow` is included in `requirements.txt` but requires the `--pre` flag because it uses pre-release versioning:
 
 ```bash
-pip install essentia-tensorflow==2.1b6.dev1389
+pip install --pre -r requirements.txt
+```
+
+Or install it standalone:
+
+```bash
+pip install --pre essentia-tensorflow==2.1b6.dev1389
 ```
 
 > **Note:** `essentia-tensorflow` provides pre-built wheels for Linux (x86_64) and macOS (x86_64/arm64) on Python 3.9–3.12. If no wheel is available for your platform, mood scanning falls back to API-only tagging (Last.fm + MusicBrainz + file metadata) — no audio analysis, but still useful.
@@ -177,8 +183,8 @@ pip install essentia-tensorflow==2.1b6.dev1389
 - The AI uses these tags as filters in Pass 1 and as context in Pass 2
 
 **Troubleshooting:**
-- **"essentia-tensorflow not installed"** — Essentia isn't installed or failed to install. For Docker, rebuild the image. For local, run `pip install essentia-tensorflow==2.1b6.dev1389`.
-- **"Essentia model download failed"** — The container needs internet access on first run to download models. Check network/firewall settings.
+- **"essentia-tensorflow not available"** — The `--pre` flag was likely missing during install. Run `pip install --pre essentia-tensorflow==2.1b6.dev1389`. For Docker, rebuild the image to get the fixed Dockerfile.
+- **"Essentia model download failed"** — The container needs internet access on first run to download models (~80MB). Check network/firewall settings.
 - **Mood scanning is slow** — Audio analysis is CPU-heavy (~2-5s per track). Use a small batch size (e.g. 50) and let it run in the background over time.
 
 ## Metadata Extracted

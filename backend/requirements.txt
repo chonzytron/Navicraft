@@ -4,3 +4,9 @@ httpx==0.27.2
 pydantic==2.9.2
 mutagen==1.47.0
 apscheduler==3.10.4
+
+# Mood/theme audio analysis (optional for local dev, required in Docker image).
+# Pre-release package — install with: pip install --pre essentia-tensorflow==2.1b6.dev1389
+# Falls back to API-only tagging (Last.fm + MusicBrainz) if not installed.
+# Wheels available for Linux & macOS, Python 3.9–3.12.
+essentia-tensorflow==2.1b6.dev1389

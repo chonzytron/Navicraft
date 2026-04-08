@@ -333,10 +333,8 @@ async def popularity_status():
 
 @app.post("/api/mood/scan")
 async def trigger_mood_scan():
-    """Manually trigger a mood/theme tag scan batch."""
-    if not config.mood_scan_enabled:
-        raise HTTPException(400, detail="Mood scanning is disabled. Enable it in Settings.")
-
+    """Manually trigger a mood/theme tag scan batch.
+    Works regardless of mood_scan_enabled — if the user clicks 'Scan Now', run it."""
     progress = mood_scanner.get_progress()
     if progress.get("running"):
         return {"status": "already_running", "message": "Mood scan is already in progress"}

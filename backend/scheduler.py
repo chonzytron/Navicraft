@@ -147,16 +147,17 @@ def start_scheduler():
     )
 
     # Mood / theme tag scanning — process X tracks, then wait Y hours, repeat.
-    # First run triggers immediately; subsequent runs scheduled Y hours after
+    # Always registered (checks config.mood_scan_enabled at runtime) so that
+    # enabling via the UI Settings takes effect without a container restart.
+    # First run triggers after 30s; subsequent runs scheduled Y hours after
     # each batch completes (not Y hours from schedule start).
-    if config.mood_scan_enabled:
-        _scheduler.add_job(
-            _scheduled_mood_scan,
-            trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=30)),
-            id="mood_scan",
-            name="Mood tag scan",
-            replace_existing=True,
-        )
+    _scheduler.add_job(
+        _scheduled_mood_scan,
+        trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=30)),
+        id="mood_scan",
+        name="Mood tag scan",
+        replace_existing=True,
+    )
 
     _scheduler.start()
     logger.info(

@@ -2,13 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies: curl for health check, libs for essentia audio analysis
+# Install system dependencies and Python packages
 COPY backend/requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl libfftw3-3 libavcodec60 libavformat60 libavutil58 \
-        libswresample4 libsamplerate0 libyaml-0-2 libtag1v5 \
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt
+
+# Install essentia-tensorflow (optional — mood scanning falls back to API-only if unavailable)
+RUN pip install --no-cache-dir essentia-tensorflow==2.1b6.dev1116 || \
+    echo "WARNING: essentia-tensorflow not available, mood audio analysis disabled"
 
 # Copy app
 COPY backend/ /app/

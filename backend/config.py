@@ -14,7 +14,7 @@ EDITABLE_FIELDS = {
     "gemini_api_key", "gemini_model",
     "lastfm_api_key", "scan_interval_hours",
     "timezone",
-    "mood_scan_enabled", "mood_scan_batch_size",
+    "mood_scan_enabled",
     "mood_scan_from_hour", "mood_scan_to_hour",
 }
 
@@ -136,11 +136,6 @@ class Config:
 
         raw_mood_enabled = _resolve("MOOD_SCAN_ENABLED", "false", overrides, "mood_scan_enabled")
         self.mood_scan_enabled = raw_mood_enabled.lower() in ("true", "1", "yes")
-        raw_mood_batch = _resolve("MOOD_SCAN_BATCH_SIZE", "50", overrides, "mood_scan_batch_size")
-        try:
-            self.mood_scan_batch_size = max(1, min(500, int(raw_mood_batch)))
-        except (ValueError, TypeError):
-            self.mood_scan_batch_size = 50
         raw_from = _resolve("MOOD_SCAN_FROM_HOUR", "0", overrides, "mood_scan_from_hour")
         try:
             self.mood_scan_from_hour = max(0, min(23, int(raw_from)))

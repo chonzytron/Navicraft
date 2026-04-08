@@ -69,13 +69,9 @@
   <!-- Mood Scan Progress -->
   <div class="enrich-bar" id="moodBar">
     <div class="enrich-row">
-      <span class="enrich-label">Mood</span>
+      <span class="enrich-label mood-label" id="moodLabel" onclick="toggleContinuousMood()" title="Click to start continuous scanning">Mood</span>
       <div class="enrich-track"><div class="enrich-fill mood-scan" id="moodFill"></div></div>
       <span class="enrich-pct" id="moodText">0%</span>
-      <button class="mood-scan-btn mood-play-btn" id="moodPlayBtn" onclick="toggleContinuousMood()" title="Run continuously">
-        <svg id="moodPlayIcon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><polygon points="1,0 10,5 1,10"/></svg>
-        <svg id="moodPauseIcon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style="display:none"><rect x="1" y="0" width="3" height="10"/><rect x="6" y="0" width="3" height="10"/></svg>
-      </button>
     </div>
   </div>
 
@@ -284,10 +280,6 @@
         <label class="cfg-field cfg-toggle-field">
           <span>Enable Mood Scanning</span>
           <div class="toggle-track" id="cfgMoodScanEnabled" onclick="this.classList.toggle('on')"></div>
-        </label>
-        <label class="cfg-field">
-          <span>Batch Size (tracks)</span>
-          <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgMoodScanBatchSize" placeholder="50" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
         </label>
         <label class="cfg-field">
           <span>Schedule From</span>

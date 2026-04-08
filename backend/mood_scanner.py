@@ -19,6 +19,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Suppress noisy TensorFlow C++ warnings (CUDA, network, etc.) before any TF import.
+# These are irrelevant in CPU-only environments (Docker containers, most servers).
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 import httpx
 
 import database as db
@@ -416,7 +420,9 @@ async def scan_mood_tags(batch_size: int | None = None) -> dict:
         try:
             # Check essentia availability
             try:
-                import essentia  # noqa: F401
+                import essentia
+                essentia.log.infoActive = False
+                essentia.log.warningActive = False
                 import essentia.standard  # noqa: F401
                 has_essentia = True
             except Exception as exc:

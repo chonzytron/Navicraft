@@ -68,6 +68,8 @@ unraid/
 ```bash
 cd backend
 pip install -r requirements.txt
+# Optional: enable Essentia audio analysis for mood/theme tagging
+pip install essentia-tensorflow==2.1b6.dev1389
 export MUSIC_DIR=/path/to/music
 uvicorn main:app --reload --port 8085
 ```

@@ -413,15 +413,7 @@ function _updateMoodUI(s){
   if(incomplete||s.running||s.continuous){
     $('#moodBar').classList.add('on');
     $('#moodFill').style.width=`${pct}%`;
-    if(s.running){
-      $('#moodText').textContent=`${pct}%`;
-      $('#moodScanBtn').disabled=true;
-      $('#moodScanBtn').textContent='Scanning...';
-    }else{
-      $('#moodText').textContent=incomplete?`${pct}% (${s.remaining} left)`:`${pct}%`;
-      $('#moodScanBtn').disabled=false;
-      $('#moodScanBtn').textContent='Scan';
-    }
+    $('#moodText').textContent=`${pct}%`;
     _updateMoodPlayBtn(s.continuous);
   }else{
     $('#moodBar').classList.remove('on');
@@ -439,31 +431,6 @@ function pollMoodScan(){
   };
   check();
   moodTimer=setInterval(check,15000);
-}
-
-async function triggerMoodScan(){
-  try{
-    $('#moodScanBtn').disabled=true;
-    $('#moodScanBtn').textContent='Starting...';
-    await api('/mood/scan',{method:'POST'});
-    toast('Mood scan started','info');
-    // Poll more frequently while running
-    if(moodTimer)clearInterval(moodTimer);
-    const fastPoll=setInterval(async()=>{
-      try{
-        const s=await api('/mood/status');
-        _updateMoodUI(s);
-        if(!s.running&&!s.continuous){
-          clearInterval(fastPoll);
-          pollMoodScan();
-        }
-      }catch{clearInterval(fastPoll);pollMoodScan()}
-    },3000);
-  }catch(e){
-    toast(`Mood scan failed: ${e.message}`,'error');
-    $('#moodScanBtn').disabled=false;
-    $('#moodScanBtn').textContent='Scan';
-  }
 }
 
 async function toggleContinuousMood(){

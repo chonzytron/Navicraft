@@ -2,12 +2,11 @@
 Essentia-based mood and theme tag scanner using MTG-Jamendo models.
 
 Analyzes audio files locally to assign mood tags (happy, sad, energetic, etc.)
-and theme tags (film, nature, party, etc.). Supplements Essentia analysis with:
-- File metadata mood tags (ID3/Vorbis mood field)
-- Last.fm user-applied tags (via track.getTopTags API)
-- MusicBrainz folksonomy tags (via tag lookup API)
+and theme tags (film, nature, party, etc.) using the MTG-Jamendo mood/theme
+classification model. Only Essentia audio analysis is used as the tag source
+to ensure a standardized, consistent vocabulary across the entire library.
 
-All tags are categorized into mood (emotional state/energy) vs theme
+Tags are categorized into mood (emotional state/energy) vs theme
 (context/setting/use-case) buckets and stored separately.
 """
 
@@ -76,57 +75,6 @@ THEME_CATEGORY = {
     "travel",
 }
 
-# Common Last.fm / MusicBrainz user tags mapped to our mood/theme categories.
-# Tags not in these maps are attempted via the Essentia category sets above,
-# and if still unmatched, skipped.
-LASTFM_MOOD_ALIASES = {
-    "chill": "calm", "chillout": "calm", "mellow": "calm", "peaceful": "calm",
-    "aggressive": "heavy", "angry": "heavy", "intense": "heavy",
-    "beautiful": "melodic", "atmospheric": "deep", "ambient": "meditative",
-    "uplifting": "uplifting", "euphoric": "uplifting", "joyful": "happy",
-    "cheerful": "happy", "danceable": "groovy", "groovy": "groovy",
-    "melancholy": "melancholic", "bittersweet": "melancholic",
-    "nostalgic": "melancholic", "sentimental": "emotional",
-    "dreamy": "dream", "ethereal": "dream", "hypnotic": "deep",
-    "sensual": "sexy", "seductive": "sexy",
-    "depressing": "sad", "somber": "sad", "gloomy": "dark",
-    "haunting": "dark", "eerie": "dark", "sinister": "dark",
-    "tender": "soft", "gentle": "soft", "delicate": "soft",
-    "triumphant": "epic", "anthemic": "epic", "majestic": "epic",
-    "playful": "fun", "quirky": "fun", "witty": "funny",
-    "passionate": "emotional", "heartfelt": "emotional",
-    "fierce": "powerful", "bold": "powerful", "driving": "energetic",
-    "lively": "energetic", "vibrant": "energetic", "dynamic": "energetic",
-}
-
-LASTFM_THEME_ALIASES = {
-    "workout": "sport", "exercise": "sport", "gym": "sport", "running": "sport",
-    "driving": "travel", "road trip": "travel", "journey": "travel",
-    "study": "background", "focus": "background", "concentration": "background",
-    "sleep": "background", "night": "background",
-    "cinematic": "film", "soundtrack": "film", "ost": "film", "score": "film",
-    "gaming": "game", "video game": "game",
-    "festive": "holiday", "xmas": "christmas", "winter": "christmas",
-    "beach": "summer", "tropical": "summer", "sunny": "summer",
-    "urban": "corporate", "city": "corporate",
-    "vintage": "retro", "oldies": "retro", "throwback": "retro",
-    "meditation": "nature", "yoga": "nature", "zen": "nature",
-    "dance": "party", "club": "party", "rave": "party",
-    "kids": "children", "lullaby": "children",
-    "wedding": "romantic", "love songs": "love",
-    "sci-fi": "space", "futuristic": "space", "cosmic": "space",
-}
-
-# Last.fm API settings
-LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
-LASTFM_DELAY = 0.25
-LASTFM_TAG_MIN_COUNT = 10  # Minimum tag count to consider a Last.fm tag relevant
-
-# MusicBrainz API settings
-MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
-MUSICBRAINZ_DELAY = 1.1
-MUSICBRAINZ_USER_AGENT = "NaviCraft/2.0 (https://github.com/chonzytron/navicraft)"
-
 
 def _get_model_dir() -> Path:
     data_dir = Path(os.getenv("DATA_DIR", os.path.dirname(config.db_path)))
@@ -184,56 +132,39 @@ def _load_labels(model_dir: Path) -> list[str]:
 
 def _categorize_tag(tag: str) -> tuple[Optional[str], Optional[str]]:
     """Categorize a tag into mood or theme. Returns (category, canonical_tag).
-    category is 'mood' or 'theme', or None if unrecognized."""
+    category is 'mood' or 'theme', or None if unrecognized.
+    Only accepts tags from the canonical Essentia vocabulary."""
     tag_lower = tag.lower().strip()
     if tag_lower in MOOD_CATEGORY:
         return "mood", tag_lower
     if tag_lower in THEME_CATEGORY:
         return "theme", tag_lower
-    if tag_lower in LASTFM_MOOD_ALIASES:
-        return "mood", LASTFM_MOOD_ALIASES[tag_lower]
-    if tag_lower in LASTFM_THEME_ALIASES:
-        return "theme", LASTFM_THEME_ALIASES[tag_lower]
     return None, None
 
 
-def _categorize_file_mood(mood_str: str) -> tuple[set, set]:
-    """Parse the existing file-tag mood field and categorize into mood/theme sets."""
-    mood_tags = set()
-    theme_tags = set()
-    if not mood_str:
-        return mood_tags, theme_tags
-    # Mood field may be semicolon, comma, or slash separated
-    for sep in [";", ",", "/"]:
-        if sep in mood_str:
-            parts = [p.strip() for p in mood_str.split(sep) if p.strip()]
-            break
-    else:
-        parts = [mood_str.strip()]
-
-    for part in parts:
-        cat, canonical = _categorize_tag(part)
-        if cat == "mood":
-            mood_tags.add(canonical)
-        elif cat == "theme":
-            theme_tags.add(canonical)
-    return mood_tags, theme_tags
+def _format_scored_tags(scores: dict[str, float]) -> str:
+    """Format a {tag: confidence} dict as a comma-separated string sorted by confidence desc.
+    Example: "happy:0.85, energetic:0.72, upbeat:0.31"
+    """
+    sorted_tags = sorted(scores.items(), key=lambda x: -x[1])
+    return ", ".join(f"{tag}:{score}" for tag, score in sorted_tags)
 
 
 # --- Essentia audio analysis ---
 
 def _analyze_track_essentia(
     file_path: str, embedding_model, mood_model, labels: list[str]
-) -> tuple[set, set]:
-    """Analyze a single track with Essentia. Returns (mood_tags, theme_tags)."""
-    mood_tags = set()
-    theme_tags = set()
+) -> tuple[dict, dict]:
+    """Analyze a single track with Essentia. Returns (mood_scores, theme_scores).
+    Each dict maps canonical tag name to confidence score (0.0-1.0)."""
+    mood_scores: dict[str, float] = {}
+    theme_scores: dict[str, float] = {}
     try:
         from essentia.standard import MonoLoader
 
         audio = MonoLoader(filename=file_path, sampleRate=16000, resampleQuality=4)()
         if len(audio) < 16000:  # less than 1 second
-            return mood_tags, theme_tags
+            return mood_scores, theme_scores
 
         embeddings = embedding_model(audio)
         predictions = mood_model(embeddings)
@@ -249,19 +180,19 @@ def _analyze_track_essentia(
                     tag = tag.split("---")[-1]
                 cat, canonical = _categorize_tag(tag)
                 if cat == "mood":
-                    mood_tags.add(canonical)
+                    mood_scores[canonical] = round(float(score), 3)
                 elif cat == "theme":
-                    theme_tags.add(canonical)
+                    theme_scores[canonical] = round(float(score), 3)
     except Exception as e:
         logger.debug("Essentia analysis failed for %s: %s", file_path, e)
 
-    return mood_tags, theme_tags
+    return mood_scores, theme_scores
 
 
 def _scan_batch_essentia_sync(
     tracks: list[dict], model_dir: Path, labels: list[str], progress_cb=None
-) -> dict[int, tuple[set, set]]:
-    """Synchronously run Essentia on a batch. Returns {track_id: (mood_set, theme_set)}."""
+) -> dict[int, tuple[dict, dict]]:
+    """Synchronously run Essentia on a batch. Returns {track_id: (mood_scores, theme_scores)}."""
     from essentia.standard import TensorflowPredictEffnetDiscogs, TensorflowPredict2D
 
     embedding_model = TensorflowPredictEffnetDiscogs(
@@ -284,129 +215,14 @@ def _scan_batch_essentia_sync(
     return results
 
 
-# --- API tag lookups ---
-
-async def _lookup_lastfm_tags(
-    client: httpx.AsyncClient, artist: str, title: str
-) -> tuple[set, set]:
-    """Fetch top tags from Last.fm and categorize into mood/theme."""
-    mood_tags = set()
-    theme_tags = set()
-    try:
-        resp = await client.get(
-            LASTFM_BASE,
-            params={
-                "method": "track.getTopTags",
-                "api_key": config.lastfm_api_key,
-                "artist": artist,
-                "track": title,
-                "format": "json",
-            },
-        )
-        if resp.status_code == 429:
-            return mood_tags, theme_tags
-        resp.raise_for_status()
-        data = resp.json()
-
-        tags = data.get("toptags", {}).get("tag", [])
-        for tag_obj in tags:
-            count = int(tag_obj.get("count", 0))
-            if count < LASTFM_TAG_MIN_COUNT:
-                continue
-            name = tag_obj.get("name", "").lower().strip()
-            cat, canonical = _categorize_tag(name)
-            if cat == "mood":
-                mood_tags.add(canonical)
-            elif cat == "theme":
-                theme_tags.add(canonical)
-    except Exception as e:
-        logger.debug("Last.fm tag lookup failed for '%s - %s': %s", artist, title, e)
-
-    return mood_tags, theme_tags
-
-
-async def _lookup_musicbrainz_tags(
-    client: httpx.AsyncClient, artist: str, title: str
-) -> tuple[set, set]:
-    """Fetch folksonomy tags from MusicBrainz and categorize into mood/theme."""
-    mood_tags = set()
-    theme_tags = set()
-    try:
-        # First, find the recording MBID
-        query = f'recording:"{title}" AND artist:"{artist}"'
-        resp = await client.get(
-            f"{MUSICBRAINZ_BASE}/recording",
-            params={"query": query, "limit": 3, "fmt": "json"},
-            headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
-        )
-        if resp.status_code in (429, 503):
-            return mood_tags, theme_tags
-        resp.raise_for_status()
-        data = resp.json()
-
-        recordings = data.get("recordings", [])
-        if not recordings:
-            return mood_tags, theme_tags
-
-        # Match artist
-        artist_lower = artist.lower()
-        best = None
-        for rec in recordings:
-            for ac in rec.get("artist-credit", []):
-                ac_name = (ac.get("name") or ac.get("artist", {}).get("name", "")).lower()
-                if artist_lower in ac_name or ac_name in artist_lower:
-                    best = rec
-                    break
-            if best:
-                break
-        if not best:
-            best = recordings[0]
-
-        mbid = best.get("id")
-        if not mbid:
-            return mood_tags, theme_tags
-
-        await asyncio.sleep(MUSICBRAINZ_DELAY)
-
-        # Fetch tags for this recording
-        resp2 = await client.get(
-            f"{MUSICBRAINZ_BASE}/recording/{mbid}",
-            params={"inc": "tags", "fmt": "json"},
-            headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
-        )
-        if resp2.status_code in (429, 503):
-            return mood_tags, theme_tags
-        resp2.raise_for_status()
-        tag_data = resp2.json()
-
-        for tag_obj in tag_data.get("tags", []):
-            count = tag_obj.get("count", 0)
-            if count < 1:
-                continue
-            name = tag_obj.get("name", "").lower().strip()
-            cat, canonical = _categorize_tag(name)
-            if cat == "mood":
-                mood_tags.add(canonical)
-            elif cat == "theme":
-                theme_tags.add(canonical)
-    except Exception as e:
-        logger.debug("MusicBrainz tag lookup failed for '%s - %s': %s", artist, title, e)
-
-    return mood_tags, theme_tags
-
-
 # --- Main scan pipeline ---
 
 async def scan_mood_tags(batch_size: int | None = None) -> dict:
     """
-    Scan tracks for mood and theme tags.
+    Scan tracks for mood and theme tags using Essentia audio analysis only.
 
-    Pipeline per track:
-    1. Essentia audio analysis (MTG-Jamendo mood/theme model)
-    2. File metadata mood field
-    3. Last.fm top tags (if API key configured)
-    4. MusicBrainz folksonomy tags
-    5. Merge all sources, categorize into mood vs theme, store in DB.
+    Uses the MTG-Jamendo mood/theme model to classify tracks into a standardized
+    vocabulary of 31 mood tags and 26 theme tags with confidence scores.
     """
     if _mood_scan_lock.locked():
         return {"status": "already_running"}
@@ -428,18 +244,20 @@ async def scan_mood_tags(batch_size: int | None = None) -> dict:
             except Exception as exc:
                 has_essentia = False
                 logger.warning(
-                    "essentia-tensorflow not available — skipping audio analysis, using API tags only. "
+                    "essentia-tensorflow not available — mood scanning requires it. "
                     "Install with: pip install --pre essentia-tensorflow==2.1b6.dev1389 — error: %s", exc
                 )
+                _mood_scan_progress.update(running=False, message="Essentia not available")
+                return {"status": "error", "message": "essentia-tensorflow is required for mood scanning"}
 
             # Download models if needed
-            if has_essentia:
-                if not await download_models():
-                    logger.warning("Essentia model download failed — skipping audio analysis")
-                    has_essentia = False
+            if not await download_models():
+                logger.warning("Essentia model download failed")
+                _mood_scan_progress.update(running=False, message="Model download failed")
+                return {"status": "error", "message": "Failed to download Essentia models"}
 
-            model_dir = _get_model_dir() if has_essentia else None
-            labels = _load_labels(model_dir) if has_essentia else []
+            model_dir = _get_model_dir()
+            labels = _load_labels(model_dir)
 
             # Get tracks that need mood scanning
             with db.get_db() as conn:
@@ -452,81 +270,42 @@ async def scan_mood_tags(batch_size: int | None = None) -> dict:
             total = len(tracks)
             _mood_scan_progress.update(total=total, message=f"Analyzing 0/{total} tracks...")
 
-            # Phase 1: Essentia audio analysis (CPU-heavy, run in thread pool)
-            essentia_results: dict[int, tuple[set, set]] = {}
-            if has_essentia:
-                def progress_cb(current, batch_total):
-                    _mood_scan_progress.update(
-                        current=current,
-                        message=f"Essentia: {current}/{batch_total} tracks...",
-                    )
-
-                loop = asyncio.get_event_loop()
-                essentia_results = await loop.run_in_executor(
-                    None,
-                    _scan_batch_essentia_sync,
-                    tracks, model_dir, labels, progress_cb,
+            # Essentia audio analysis (CPU-heavy, run in thread pool)
+            def progress_cb(current, batch_total):
+                _mood_scan_progress.update(
+                    current=current,
+                    message=f"Essentia: {current}/{batch_total} tracks...",
                 )
 
-            # Phase 2: File tag moods + API tag lookups
-            has_lastfm = bool(config.lastfm_api_key)
+            loop = asyncio.get_event_loop()
+            essentia_results = await loop.run_in_executor(
+                None,
+                _scan_batch_essentia_sync,
+                tracks, model_dir, labels, progress_cb,
+            )
+
+            # Build DB update rows from Essentia results
             now = time.time()
             results: list[tuple] = []  # (mood_tags, theme_tags, essentia_scanned_at, track_id)
             tagged = 0
 
-            async with httpx.AsyncClient(
-                timeout=15, headers={"Accept": "application/json"}
-            ) as client:
-                for i, track in enumerate(tracks):
-                    track_id = track["id"]
-                    artist = track.get("artist", "")
-                    title = track.get("title", "")
+            for track in tracks:
+                track_id = track["id"]
+                mood_scores, theme_scores = essentia_results.get(track_id, ({}, {}))
 
-                    # Start with Essentia results
-                    mood_set, theme_set = essentia_results.get(track_id, (set(), set()))
+                # Store as "tag:confidence" pairs sorted by confidence descending
+                mood_str = _format_scored_tags(mood_scores) if mood_scores else None
+                theme_str = _format_scored_tags(theme_scores) if theme_scores else None
 
-                    # Add file tag mood
-                    file_moods, file_themes = _categorize_file_mood(track.get("mood") or "")
-                    mood_set |= file_moods
-                    theme_set |= file_themes
+                results.append((mood_str, theme_str, now, track_id))
+                if mood_str or theme_str:
+                    tagged += 1
 
-                    # Last.fm tags
-                    if has_lastfm and artist and title:
-                        lfm_moods, lfm_themes = await _lookup_lastfm_tags(client, artist, title)
-                        mood_set |= lfm_moods
-                        theme_set |= lfm_themes
-                        await asyncio.sleep(LASTFM_DELAY)
-
-                    # MusicBrainz tags
-                    if artist and title:
-                        mb_moods, mb_themes = await _lookup_musicbrainz_tags(client, artist, title)
-                        mood_set |= mb_moods
-                        theme_set |= mb_themes
-                        await asyncio.sleep(MUSICBRAINZ_DELAY)
-
-                    mood_str = ", ".join(sorted(mood_set)) if mood_set else None
-                    theme_str = ", ".join(sorted(theme_set)) if theme_set else None
-
-                    results.append((mood_str, theme_str, now, track_id))
-                    if mood_str or theme_str:
-                        tagged += 1
-
-                    if (i + 1) % 5 == 0 or i == total - 1:
-                        _mood_scan_progress.update(
-                            current=i + 1,
-                            message=f"Enriching tags: {i + 1}/{total} tracks...",
-                        )
-
-                    # Batch write every 50 tracks
-                    if len(results) >= 50:
-                        with db.get_db() as conn:
-                            db.bulk_update_mood_tags(conn, results)
-                        results.clear()
-
-            # Flush remaining
-            if results:
+            # Batch write to DB
+            for i in range(0, len(results), 50):
+                batch = results[i:i + 50]
                 with db.get_db() as conn:
-                    db.bulk_update_mood_tags(conn, results)
+                    db.bulk_update_mood_tags(conn, batch)
 
             _mood_scan_progress.update(
                 running=False,

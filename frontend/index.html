@@ -72,7 +72,6 @@
       <span class="enrich-label mood-label" id="moodLabel" onclick="toggleContinuousMood()" title="Click to start continuous scanning">Mood</span>
       <div class="enrich-track"><div class="enrich-fill mood-scan" id="moodFill"></div></div>
       <span class="enrich-pct" id="moodText">0%</span>
-      <div class="mood-sched-toggle" id="moodSchedToggle" onclick="toggleMoodSchedule()" title="Enable scheduled mood scanning"></div>
     </div>
   </div>
 
@@ -280,16 +279,18 @@
         <h3>Mood / Theme Tagging</h3>
         <label class="cfg-field cfg-toggle-field">
           <span>Enable Mood Scanning</span>
-          <div class="toggle-track" id="cfgMoodScanEnabled" onclick="this.classList.toggle('on')"></div>
+          <div class="toggle-track" id="cfgMoodScanEnabled" onclick="this.classList.toggle('on');_syncMoodFields()"></div>
         </label>
-        <label class="cfg-field">
-          <span>Schedule From</span>
-          <select id="cfgMoodScanFromHour"></select>
-        </label>
-        <label class="cfg-field">
-          <span>Schedule To</span>
-          <select id="cfgMoodScanToHour"></select>
-        </label>
+        <div id="moodScheduleFields">
+          <label class="cfg-field">
+            <span>Schedule From</span>
+            <select id="cfgMoodScanFromHour"></select>
+          </label>
+          <label class="cfg-field">
+            <span>Schedule To</span>
+            <select id="cfgMoodScanToHour"></select>
+          </label>
+        </div>
       </div>
     </div>
     <div class="cfg-footer">

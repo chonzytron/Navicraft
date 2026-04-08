@@ -404,7 +404,6 @@ let moodTimer=null;
 function _updateMoodUI(s){
   const pct=Math.round(s.percent??0);
   const incomplete=s.remaining>0;
-  // Show bar whenever there are unscanned tracks so user can toggle schedule on
   if(incomplete||s.running||s.continuous){
     $('#moodBar').classList.add('on');
     $('#moodFill').style.width=`${pct}%`;
@@ -414,18 +413,11 @@ function _updateMoodUI(s){
   }
   $('#moodLabel').classList.toggle('active',!!s.continuous);
   $('#moodLabel').title=s.continuous?'Click to pause':'Click to start continuous scanning';
-  $('#moodSchedToggle').classList.toggle('on',!!s.enabled);
-  $('#moodSchedToggle').title=s.enabled?'Scheduled scanning on — click to disable':'Click to enable scheduled scanning';
 }
 
-async function toggleMoodSchedule(){
-  const isOn=$('#moodSchedToggle').classList.contains('on');
-  const val=isOn?'false':'true';
-  try{
-    await api('/config',{method:'PUT',body:JSON.stringify({mood_scan_enabled:val})});
-    $('#moodSchedToggle').classList.toggle('on',!isOn);
-    toast(isOn?'Mood schedule disabled':'Mood schedule enabled','info');
-  }catch(e){toast(`Failed: ${e.message}`,'error')}
+function _syncMoodFields(){
+  const on=$('#cfgMoodScanEnabled').classList.contains('on');
+  $('#moodScheduleFields').classList.toggle('disabled',!on);
 }
 
 function pollMoodScan(){
@@ -518,6 +510,7 @@ async function openConfig(){
       if(el)el.classList.toggle('on',cfg[key]==='true');
     }
   }catch(e){toast('Failed to load config','error');return}
+  _syncMoodFields();
   $('#cfgOverlay').classList.add('on');
 }
 

@@ -134,12 +134,13 @@ docker logs -f navicraft
 
 **Mood scanning not working:**
 - Ensure mood scanning is enabled in Settings (gear icon) under "Mood / Theme Tagging"
-- If logs show `essentia-tensorflow not installed`, re-pull or rebuild the image to pick up the latest Dockerfile which fixes the package version:
+- If logs show `essentia-tensorflow not available`, re-pull or rebuild the image — the latest Dockerfile fixes the installation:
   - Pre-built image: re-run the deploy script (it always pulls latest)
   - Build from source: `git pull` in the source directory, then re-run the deploy script with `BUILD_FROM_SOURCE=true`
 - On first run, Essentia models (~80MB) auto-download — the container needs internet access. Check logs for download progress
 - Mood scanning is CPU-heavy (~2-5s per track); large batches may take a while
 - Check logs: `docker logs navicraft | grep -i mood`
+- The log message now includes the specific error — if you see an import error with a missing `.so` library, please file an issue
 
 **AI generation failing:**
 - Check logs for the actual error: `docker logs navicraft | grep ERROR`

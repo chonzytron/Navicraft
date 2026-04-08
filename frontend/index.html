@@ -72,7 +72,10 @@
       <span class="enrich-label">Mood</span>
       <div class="enrich-track"><div class="enrich-fill mood-scan" id="moodFill"></div></div>
       <span class="enrich-pct" id="moodText">0%</span>
-      <button class="mood-scan-btn" id="moodScanBtn" onclick="triggerMoodScan()" title="Scan now">Scan</button>
+      <button class="mood-scan-btn mood-play-btn" id="moodPlayBtn" onclick="toggleContinuousMood()" title="Run continuously">
+        <svg id="moodPlayIcon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><polygon points="1,0 10,5 1,10"/></svg>
+        <svg id="moodPauseIcon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style="display:none"><rect x="1" y="0" width="3" height="10"/><rect x="6" y="0" width="3" height="10"/></svg>
+      </button>
     </div>
   </div>
 
@@ -225,18 +228,74 @@
         </label>
       </div>
       <div class="cfg-section">
+        <h3>General</h3>
+        <label class="cfg-field">
+          <span>Timezone</span>
+          <select id="cfgTimezone">
+            <option value="UTC">UTC</option>
+            <option value="US/Eastern">US/Eastern</option>
+            <option value="US/Central">US/Central</option>
+            <option value="US/Mountain">US/Mountain</option>
+            <option value="US/Pacific">US/Pacific</option>
+            <option value="US/Alaska">US/Alaska</option>
+            <option value="US/Hawaii">US/Hawaii</option>
+            <option value="Canada/Atlantic">Canada/Atlantic</option>
+            <option value="Canada/Eastern">Canada/Eastern</option>
+            <option value="Canada/Central">Canada/Central</option>
+            <option value="Canada/Mountain">Canada/Mountain</option>
+            <option value="Canada/Pacific">Canada/Pacific</option>
+            <option value="Europe/London">Europe/London</option>
+            <option value="Europe/Paris">Europe/Paris</option>
+            <option value="Europe/Berlin">Europe/Berlin</option>
+            <option value="Europe/Amsterdam">Europe/Amsterdam</option>
+            <option value="Europe/Rome">Europe/Rome</option>
+            <option value="Europe/Madrid">Europe/Madrid</option>
+            <option value="Europe/Zurich">Europe/Zurich</option>
+            <option value="Europe/Stockholm">Europe/Stockholm</option>
+            <option value="Europe/Oslo">Europe/Oslo</option>
+            <option value="Europe/Helsinki">Europe/Helsinki</option>
+            <option value="Europe/Moscow">Europe/Moscow</option>
+            <option value="Europe/Istanbul">Europe/Istanbul</option>
+            <option value="Europe/Athens">Europe/Athens</option>
+            <option value="Asia/Dubai">Asia/Dubai</option>
+            <option value="Asia/Kolkata">Asia/Kolkata</option>
+            <option value="Asia/Bangkok">Asia/Bangkok</option>
+            <option value="Asia/Singapore">Asia/Singapore</option>
+            <option value="Asia/Shanghai">Asia/Shanghai</option>
+            <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+            <option value="Asia/Tokyo">Asia/Tokyo</option>
+            <option value="Asia/Seoul">Asia/Seoul</option>
+            <option value="Australia/Sydney">Australia/Sydney</option>
+            <option value="Australia/Melbourne">Australia/Melbourne</option>
+            <option value="Australia/Perth">Australia/Perth</option>
+            <option value="Australia/Brisbane">Australia/Brisbane</option>
+            <option value="Pacific/Auckland">Pacific/Auckland</option>
+            <option value="America/Mexico_City">America/Mexico_City</option>
+            <option value="America/Sao_Paulo">America/Sao_Paulo</option>
+            <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires</option>
+            <option value="Africa/Johannesburg">Africa/Johannesburg</option>
+            <option value="Africa/Cairo">Africa/Cairo</option>
+            <option value="Africa/Lagos">Africa/Lagos</option>
+          </select>
+        </label>
+      </div>
+      <div class="cfg-section">
         <h3>Mood / Theme Tagging</h3>
         <label class="cfg-field cfg-toggle-field">
           <span>Enable Mood Scanning</span>
           <div class="toggle-track" id="cfgMoodScanEnabled" onclick="this.classList.toggle('on')"></div>
         </label>
         <label class="cfg-field">
-          <span>Batch Size (tracks per run)</span>
+          <span>Batch Size (tracks)</span>
           <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgMoodScanBatchSize" placeholder="50" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
         </label>
         <label class="cfg-field">
-          <span>Scan Interval (hours)</span>
-          <input type="text" inputmode="numeric" pattern="[0-9]*" id="cfgMoodScanIntervalHours" placeholder="24" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+          <span>Schedule From</span>
+          <select id="cfgMoodScanFromHour"></select>
+        </label>
+        <label class="cfg-field">
+          <span>Schedule To</span>
+          <select id="cfgMoodScanToHour"></select>
         </label>
       </div>
     </div>

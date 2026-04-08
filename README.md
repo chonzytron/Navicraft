@@ -19,7 +19,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
     Essentia MTG-Jamendo model analyzes audio → mood tags (happy, sad, energetic, ...)
     + theme tags (film, party, nature, summer, ...).
     Supplemented with Last.fm user tags and MusicBrainz folksonomy tags.
-    Configurable: process X tracks every Y hours. Enable in Settings.
+    Configurable: batch size, schedule window (e.g. overnight), or continuous mode. Enable in Settings.
 
 3. GENERATE (two-pass AI)
    Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, exclusions)
@@ -105,9 +105,11 @@ Most settings can be configured from the **Settings gear icon** in the web UI. T
 | Gemini Model | `gemini-2.5-flash` | Gemini model identifier |
 | Last.fm API Key | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
 | Scan Interval | `6` hours | Background scan interval |
+| Timezone | `UTC` | IANA timezone for schedule window (e.g. `America/New_York`) |
 | Mood Scan Enabled | `false` | Enable Essentia-based mood/theme tagging |
 | Mood Scan Batch Size | `50` | Number of tracks to process per mood scan run |
-| Mood Scan Interval | `24` hours | Hours to wait between mood scan batches (starts after batch completes) |
+| Mood Scan From Hour | `0` (midnight) | Schedule window start hour (0–23) |
+| Mood Scan To Hour | `6` (6 AM) | Schedule window end hour (0–23) |
 
 These can also be set via env vars for initial bootstrap — the UI config overrides them.
 
@@ -176,8 +178,9 @@ pip install --pre essentia-tensorflow==2.1b6.dev1389
 
 **How it works:**
 - Enable in Settings under "Mood / Theme Tagging"
-- Configure batch size (X tracks) and interval (Y hours between batches)
-- The scanner processes X tracks, then waits Y hours before the next batch
+- Configure batch size and a schedule window (from/to hour in your timezone)
+- Within the window (e.g. midnight–6 AM), batches run back-to-back automatically
+- Use the play/pause button on the mood progress bar to run continuously outside the window
 - On first run, Essentia models (~80MB) are downloaded automatically from `essentia.upf.edu`
 - Tags are stored separately as `mood_tags` and `theme_tags` in the database
 - The AI uses these tags as filters in Pass 1 and as context in Pass 2
@@ -255,6 +258,7 @@ navicraft/
 | POST | `/api/mood/scan` | Manually trigger a mood/theme tag scan batch |
 | GET | `/api/mood/status` | Mood scan progress and coverage stats |
 | POST | `/api/mood/reset` | Reset all mood/theme tags for re-scanning |
+| POST | `/api/mood/continuous` | Start/stop continuous mood scanning (play/pause) |
 | POST | `/api/export/m3u` | Download playlist as .m3u file |
 
 ### Generate request

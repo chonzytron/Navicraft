@@ -194,14 +194,28 @@ async def update_config(body: dict):
             body["mood_scan_batch_size"] = str(val)
         except (ValueError, TypeError):
             raise HTTPException(400, detail="mood_scan_batch_size must be 1–500")
-    if "mood_scan_interval_hours" in body:
+    if "timezone" in body:
         try:
-            val = int(body["mood_scan_interval_hours"])
-            if val < 1 or val > 168:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(body["timezone"])
+        except Exception:
+            raise HTTPException(400, detail="Invalid timezone. Use IANA format, e.g. 'America/New_York'")
+    if "mood_scan_from_hour" in body:
+        try:
+            val = int(body["mood_scan_from_hour"])
+            if val < 0 or val > 23:
                 raise ValueError
-            body["mood_scan_interval_hours"] = str(val)
+            body["mood_scan_from_hour"] = str(val)
         except (ValueError, TypeError):
-            raise HTTPException(400, detail="mood_scan_interval_hours must be 1–168")
+            raise HTTPException(400, detail="mood_scan_from_hour must be 0–23")
+    if "mood_scan_to_hour" in body:
+        try:
+            val = int(body["mood_scan_to_hour"])
+            if val < 0 or val > 23:
+                raise ValueError
+            body["mood_scan_to_hour"] = str(val)
+        except (ValueError, TypeError):
+            raise HTTPException(400, detail="mood_scan_to_hour must be 0–23")
     config.update_from_dict(body)
     return {"status": "ok", "config": config.get_editable()}
 
@@ -367,6 +381,7 @@ async def mood_scan_status():
         "tagged": tagged,
         "percent": round(scanned / total * 100, 1) if total > 0 else 0,
         "running": progress.get("running", False),
+        "continuous": mood_scanner.is_continuous(),
         "message": progress.get("message", ""),
         "batch_current": progress.get("current", 0),
         "batch_total": progress.get("total", 0),
@@ -382,6 +397,22 @@ async def reset_mood_tags():
         "tracks_to_scan": count,
         "message": "Mood/theme tags reset. Background scanning will re-process all tracks.",
     }
+
+
+@app.post("/api/mood/continuous")
+async def toggle_continuous_mood(body: dict):
+    """Start or stop continuous mood scanning (play/pause)."""
+    action = body.get("action")
+    if action == "start":
+        if mood_scanner.is_continuous():
+            return {"status": "already_running", "continuous": True}
+        await mood_scanner.start_continuous(batch_size=config.mood_scan_batch_size)
+        return {"status": "started", "continuous": True}
+    elif action == "stop":
+        await mood_scanner.stop_continuous()
+        return {"status": "stopped", "continuous": False}
+    else:
+        raise HTTPException(400, detail="action must be 'start' or 'stop'")
 
 
 # =========================================================================

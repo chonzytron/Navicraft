@@ -552,3 +552,55 @@ async def reset_mood_tags() -> int:
 def get_progress() -> dict:
     """Return current mood scan progress."""
     return dict(_mood_scan_progress)
+
+
+# --- Continuous scanning mode ---
+
+_continuous_mode = False
+_continuous_task = None
+
+
+def is_continuous() -> bool:
+    """Return whether continuous scanning is active."""
+    return _continuous_mode
+
+
+async def start_continuous(batch_size: int):
+    """Start continuous mood scanning — runs batches back-to-back until stopped."""
+    global _continuous_mode, _continuous_task
+    if _continuous_mode:
+        return
+    _continuous_mode = True
+    _continuous_task = asyncio.create_task(_continuous_loop(batch_size))
+
+
+async def stop_continuous():
+    """Stop continuous mood scanning after the current batch finishes."""
+    global _continuous_mode
+    _continuous_mode = False
+
+
+async def _continuous_loop(batch_size: int):
+    """Run mood scan batches back-to-back until stopped or all tracks are done."""
+    global _continuous_mode
+    try:
+        while _continuous_mode:
+            # Wait if a batch is already running (e.g. triggered by scheduler)
+            progress = get_progress()
+            if progress.get("running"):
+                await asyncio.sleep(3)
+                continue
+
+            with db.get_db() as conn:
+                remaining = db.count_tracks_without_mood_scan(conn)
+            if remaining == 0:
+                logger.info("Continuous mood scan: all tracks scanned, stopping")
+                break
+
+            logger.info("Continuous mood scan: %d remaining, processing %d", remaining, batch_size)
+            await scan_mood_tags(batch_size=batch_size)
+            await asyncio.sleep(2)  # Brief pause between batches
+    except Exception:
+        logger.exception("Continuous mood scan loop failed")
+    finally:
+        _continuous_mode = False

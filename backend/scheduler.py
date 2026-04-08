@@ -6,6 +6,7 @@ Uses APScheduler with asyncio integration.
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -73,13 +74,37 @@ async def _scheduled_enrichment():
         logger.exception("Scheduled enrichment failed")
 
 
-async def _scheduled_mood_scan():
-    """Process X tracks for mood/theme tags, then schedule the next run Y hours later.
+def _is_in_mood_window() -> bool:
+    """Check if current time (in configured timezone) is within the mood scan window."""
+    from_h = config.mood_scan_from_hour
+    to_h = config.mood_scan_to_hour
+    if from_h == to_h:
+        return False  # same hour = window disabled
+    try:
+        tz = ZoneInfo(config.timezone)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    hour = datetime.now(tz).hour
+    if from_h < to_h:
+        return from_h <= hour < to_h
+    else:
+        # Wraps midnight, e.g. 22-06 means 22:00–05:59
+        return hour >= from_h or hour < to_h
 
-    Uses a one-shot DateTrigger instead of IntervalTrigger so the Y-hour wait
-    starts *after* the batch finishes, not from when it was scheduled.
+
+async def _scheduled_mood_scan():
+    """Process a batch of tracks for mood/theme tags if within the configured time window.
+
+    Uses a one-shot DateTrigger. Within the window, reschedules 30s after batch
+    completion for the next batch. Outside the window, schedules for the next
+    window start.
     """
     if not config.mood_scan_enabled:
+        _reschedule_mood_scan()
+        return
+    if not _is_in_mood_window():
+        logger.info("Mood scan: outside window (%02d:00–%02d:00 %s), sleeping",
+                     config.mood_scan_from_hour, config.mood_scan_to_hour, config.timezone)
         _reschedule_mood_scan()
         return
     try:
@@ -97,16 +122,35 @@ async def _scheduled_mood_scan():
     except Exception:
         logger.exception("Scheduled mood scan failed")
     finally:
-        # Always reschedule — Y hours from NOW (after batch completed)
         _reschedule_mood_scan()
 
 
 def _reschedule_mood_scan():
-    """Schedule the next mood scan run Y hours from now."""
+    """Schedule the next mood scan based on the time window.
+
+    If currently inside the window, run again in 30s.
+    If outside, calculate seconds until the next window start.
+    """
     global _scheduler
     if not _scheduler or not _scheduler.running:
         return
-    next_run = datetime.now() + timedelta(hours=config.mood_scan_interval_hours)
+    if _is_in_mood_window():
+        next_run = datetime.now() + timedelta(seconds=30)
+    else:
+        # Calculate delay until next window start
+        try:
+            tz = ZoneInfo(config.timezone)
+        except Exception:
+            tz = ZoneInfo("UTC")
+        now = datetime.now(tz)
+        from_h = config.mood_scan_from_hour
+        target = now.replace(hour=from_h, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        delay_seconds = (target - now).total_seconds()
+        next_run = datetime.now() + timedelta(seconds=delay_seconds)
+        logger.info("Mood scan: next window at %02d:00 %s (%.1fh from now)",
+                     from_h, config.timezone, delay_seconds / 3600)
     try:
         _scheduler.add_job(
             _scheduled_mood_scan,
@@ -115,8 +159,6 @@ def _reschedule_mood_scan():
             name="Mood tag scan",
             replace_existing=True,
         )
-        logger.info("Mood scan: next run scheduled at %s (%dh from now)",
-                     next_run.strftime("%H:%M"), config.mood_scan_interval_hours)
     except Exception:
         logger.exception("Failed to reschedule mood scan")
 
@@ -146,11 +188,10 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Mood / theme tag scanning — process X tracks, then wait Y hours, repeat.
+    # Mood / theme tag scanning — runs batches within a configured time window.
     # Always registered (checks config.mood_scan_enabled at runtime) so that
     # enabling via the UI Settings takes effect without a container restart.
-    # First run triggers after 30s; subsequent runs scheduled Y hours after
-    # each batch completes (not Y hours from schedule start).
+    # First run triggers after 30s; within the window, batches run with 30s gaps.
     _scheduler.add_job(
         _scheduled_mood_scan,
         trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=30)),
@@ -161,11 +202,12 @@ def start_scheduler():
 
     _scheduler.start()
     logger.info(
-        "Scheduler started: scanning every %dh, enrichment every 2m, mood scan %s (%d tracks every %dh)",
+        "Scheduler started: scanning every %dh, enrichment every 2m, mood scan %s (%d tracks, window %02d:00–%02d:00 %s)",
         config.scan_interval_hours,
         "enabled" if config.mood_scan_enabled else "disabled",
         config.mood_scan_batch_size,
-        config.mood_scan_interval_hours,
+        config.mood_scan_from_hour, config.mood_scan_to_hour,
+        config.timezone,
     )
 
 

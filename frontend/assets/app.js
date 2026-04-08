@@ -401,28 +401,40 @@ function pollEnrichment(){
 
 // --- Mood scan progress ---
 let moodTimer=null;
+function _updateMoodPlayBtn(continuous){
+  $('#moodPlayIcon').style.display=continuous?'none':'';
+  $('#moodPauseIcon').style.display=continuous?'':'none';
+  $('#moodPlayBtn').title=continuous?'Pause continuous scan':'Run continuously';
+}
+
+function _updateMoodUI(s){
+  const pct=s.percent??0;
+  const incomplete=s.remaining>0;
+  if(incomplete||s.running||s.continuous){
+    $('#moodBar').classList.add('on');
+    $('#moodFill').style.width=`${pct}%`;
+    if(s.running){
+      $('#moodText').textContent=`${pct}%`;
+      $('#moodScanBtn').disabled=true;
+      $('#moodScanBtn').textContent='Scanning...';
+    }else{
+      $('#moodText').textContent=incomplete?`${pct}% (${s.remaining} left)`:`${pct}%`;
+      $('#moodScanBtn').disabled=false;
+      $('#moodScanBtn').textContent='Scan';
+    }
+    _updateMoodPlayBtn(s.continuous);
+  }else{
+    $('#moodBar').classList.remove('on');
+    _updateMoodPlayBtn(false);
+  }
+}
+
 function pollMoodScan(){
   if(moodTimer)clearInterval(moodTimer);
   const check=async()=>{
     try{
       const s=await api('/mood/status');
-      const incomplete=s.remaining>0;
-      if(incomplete||s.running){
-        $('#moodBar').classList.add('on');
-        const pct=s.percent??0;
-        $('#moodFill').style.width=`${pct}%`;
-        if(s.running){
-          $('#moodText').textContent=`${pct}%`;
-          $('#moodScanBtn').disabled=true;
-          $('#moodScanBtn').textContent='Scanning...';
-        }else{
-          $('#moodText').textContent=`${pct}% (${s.remaining} left)`;
-          $('#moodScanBtn').disabled=false;
-          $('#moodScanBtn').textContent='Scan';
-        }
-      }else{
-        $('#moodBar').classList.remove('on');
-      }
+      _updateMoodUI(s);
     }catch{}
   };
   check();
@@ -440,20 +452,10 @@ async function triggerMoodScan(){
     const fastPoll=setInterval(async()=>{
       try{
         const s=await api('/mood/status');
-        const pct=s.percent??0;
-        $('#moodBar').classList.add('on');
-        $('#moodFill').style.width=`${pct}%`;
-        if(s.running){
-          $('#moodText').textContent=`${pct}%`;
-          $('#moodScanBtn').disabled=true;
-          $('#moodScanBtn').textContent='Scanning...';
-        }else{
-          $('#moodText').textContent=s.remaining>0?`${pct}% (${s.remaining} left)`:`${pct}%`;
-          $('#moodScanBtn').disabled=false;
-          $('#moodScanBtn').textContent='Scan';
+        _updateMoodUI(s);
+        if(!s.running&&!s.continuous){
           clearInterval(fastPoll);
-          pollMoodScan(); // resume normal polling
-          if(!s.remaining)$('#moodBar').classList.remove('on');
+          pollMoodScan();
         }
       }catch{clearInterval(fastPoll);pollMoodScan()}
     },3000);
@@ -461,6 +463,30 @@ async function triggerMoodScan(){
     toast(`Mood scan failed: ${e.message}`,'error');
     $('#moodScanBtn').disabled=false;
     $('#moodScanBtn').textContent='Scan';
+  }
+}
+
+async function toggleContinuousMood(){
+  // Check current state from the icon visibility
+  const isPlaying=$('#moodPauseIcon').style.display!=='none';
+  const action=isPlaying?'stop':'start';
+  try{
+    await api('/mood/continuous',{method:'POST',body:JSON.stringify({action})});
+    toast(action==='start'?'Continuous mood scan started':'Continuous mood scan paused','info');
+    // Switch to fast polling
+    if(moodTimer)clearInterval(moodTimer);
+    const fastPoll=setInterval(async()=>{
+      try{
+        const s=await api('/mood/status');
+        _updateMoodUI(s);
+        if(!s.running&&!s.continuous){
+          clearInterval(fastPoll);
+          pollMoodScan();
+        }
+      }catch{clearInterval(fastPoll);pollMoodScan()}
+    },3000);
+  }catch(e){
+    toast(`Failed: ${e.message}`,'error');
   }
 }
 
@@ -478,17 +504,40 @@ const cfgFieldMap={
   lastfm_api_key:'cfgLastfmApiKey',
   scan_interval_hours:'cfgScanIntervalHours',
   mood_scan_batch_size:'cfgMoodScanBatchSize',
-  mood_scan_interval_hours:'cfgMoodScanIntervalHours',
+};
+// Select-based fields (use .value like inputs but are <select> elements)
+const cfgSelectMap={
+  timezone:'cfgTimezone',
+  mood_scan_from_hour:'cfgMoodScanFromHour',
+  mood_scan_to_hour:'cfgMoodScanToHour',
 };
 // Toggle fields need special handling (not text inputs)
 const cfgToggleMap={
   mood_scan_enabled:'cfgMoodScanEnabled',
 };
 
+function _populateHourSelects(){
+  ['cfgMoodScanFromHour','cfgMoodScanToHour'].forEach(id=>{
+    const sel=$('#'+id);
+    if(!sel||sel.options.length>0)return;
+    for(let h=0;h<24;h++){
+      const opt=document.createElement('option');
+      opt.value=String(h);
+      opt.textContent=`${String(h).padStart(2,'0')}:00`;
+      sel.appendChild(opt);
+    }
+  });
+}
+
 async function openConfig(){
+  _populateHourSelects();
   try{
     const cfg=await api('/config');
     for(const[key,elId]of Object.entries(cfgFieldMap)){
+      const el=$('#'+elId);
+      if(el)el.value=cfg[key]||'';
+    }
+    for(const[key,elId]of Object.entries(cfgSelectMap)){
       const el=$('#'+elId);
       if(el)el.value=cfg[key]||'';
     }
@@ -507,6 +556,10 @@ function closeConfig(){
 async function saveConfig(){
   const body={};
   for(const[key,elId]of Object.entries(cfgFieldMap)){
+    const el=$('#'+elId);
+    if(el)body[key]=el.value;
+  }
+  for(const[key,elId]of Object.entries(cfgSelectMap)){
     const el=$('#'+elId);
     if(el)body[key]=el.value;
   }

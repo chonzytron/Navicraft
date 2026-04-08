@@ -52,7 +52,7 @@ unraid/
 - **MusicBrainz integration**: Community ratings (0-5 scale, converted to 0-100) with vote count as confidence weight. Free API, no auth needed, strict 1 req/sec rate limit. Has its own top-up pass like Deezer and Last.fm.
 - **Enrichment lock**: `asyncio.Lock` in `popularity.py` prevents concurrent enrichment runs (startup scan, post-scan trigger, and scheduler all call `enrich_popularity`).
 - **Mood/theme tagging**: Essentia MTG-Jamendo model classifies tracks into mood tags (happy, sad, energetic, calm, etc.) and theme tags (film, party, nature, summer, etc.). Supplements audio analysis with file metadata mood field, Last.fm `track.getTopTags`, and MusicBrainz folksonomy tags. Tags are categorized into mood vs theme via a ~100-entry alias map. Stored in separate `mood_tags` and `theme_tags` columns. Configurable: enable/disable, batch size (X tracks), interval (Y hours after batch completes). Models auto-download from `essentia.upf.edu` on first use (~80MB). Graceful fallback to API-only tagging if `essentia-tensorflow` not installed.
-- **Mood scan scheduling**: Uses one-shot `DateTrigger` pattern — after each batch of X tracks completes, the next run is scheduled Y hours later. This ensures the interval is the gap between batches, not between starts.
+- **Mood scan scheduling**: Uses a configurable time window (from/to hour in the configured timezone). Within the window, batches run back-to-back with 30s gaps. Outside the window, the next run is scheduled at the window start. Supports wrapping midnight (e.g. 22:00–06:00). A separate continuous mode (play/pause) runs batches regardless of the window.
 - **SSE streaming** on `/api/generate` for real-time progress feedback. Includes `X-Accel-Buffering: no` and `Cache-Control: no-cache` headers to prevent Nginx proxy buffering.
 - **Rate limiting**: 10s cooldown on `/api/generate` to prevent double-clicks
 - **Multi-server support**: Both Navidrome and Plex/Plexamp supported as playlist targets. Songs matched by file path, fallback to artist+title. Server selector shown in UI when both are configured.
@@ -61,7 +61,7 @@ unraid/
 - **Retry logic** everywhere: AI calls (3 retries, exponential backoff), Navidrome/Plex calls, popularity lookups
 - **Song ID normalisation**: AI responses may return song IDs as strings; backend casts to `int` before candidate map lookup to prevent mismatches.
 - **AI errors surfaced to UI**: API error messages are extracted from JSON responses and raised as `ValueError` so they propagate through the SSE error event to the frontend instead of showing a generic "check logs" message.
-- **UI-configurable settings**: Navidrome, Plex, AI provider/keys/models, Last.fm API key, scan interval, and mood scan settings are configurable from the Settings gear icon in the web UI. Saved to `/data/navicraft_config.json`. Env vars act as initial defaults; JSON config takes precedence. Secrets are masked in API responses.
+- **UI-configurable settings**: Navidrome, Plex, AI provider/keys/models, Last.fm API key, scan interval, timezone, and mood scan settings (including schedule window from/to hour) are configurable from the Settings gear icon in the web UI. Saved to `/data/navicraft_config.json`. Env vars act as initial defaults; JSON config takes precedence. Secrets are masked in API responses.
 
 ## Running Locally
 
@@ -128,8 +128,9 @@ docker compose up -d --build
 | POST | `/api/popularity/re-enrich` | Reset and re-enrich all popularity data |
 | GET | `/api/popularity/status` | Enrichment progress (enriched/total/percent/running) |
 | POST | `/api/mood/scan` | Manually trigger a mood/theme tag scan batch |
-| GET | `/api/mood/status` | Mood scan progress (scanned/total/percent/running) |
+| GET | `/api/mood/status` | Mood scan progress (scanned/total/percent/running/continuous) |
 | POST | `/api/mood/reset` | Reset all mood/theme tags for re-scanning |
+| POST | `/api/mood/continuous` | Start/stop continuous mood scanning (play/pause) |
 | POST | `/api/export/m3u` | Download playlist as .m3u file |
 
 ## Key Defaults
@@ -152,9 +153,10 @@ docker compose up -d --build
 | Deezer delay | `0.1s` (10 req/s), `0.5s` after rate limit recovery | popularity.py |
 | Last.fm delay | `0.25s` (4 req/s) | popularity.py |
 | MusicBrainz delay | `1.1s` (strict 1 req/s) | popularity.py |
+| Timezone | `UTC` (IANA tz name) | config.py |
 | Mood scan enabled | `false` | config.py |
 | Mood scan batch size | `50 tracks` | config.py |
-| Mood scan interval | `24 hours` (after batch completes) | config.py / scheduler.py |
+| Mood scan window | `00:00–06:00` (configurable from/to hour) | config.py / scheduler.py |
 | Essentia confidence threshold | `0.1` | mood_scanner.py |
 | Last.fm tag min count | `10` | mood_scanner.py |
 | Default songs in UI | `30` | frontend/index.html |
@@ -172,7 +174,7 @@ docker compose up -d --build
 - **Preview toggle** — when ON, shows results before saving; when OFF, auto-saves to selected media server on generation
 - **SSE progress display** — real-time phase labels and elapsed timer during generation
 - **Enrichment progress bars** — per-source (Deezer, Last.fm, MusicBrainz) progress shown while background enrichment is running
-- **Mood scan progress bar** — shows mood/theme tagging progress when enabled
+- **Mood scan progress bar** — shows mood/theme tagging progress when enabled; play/pause button for continuous scanning
 - **Export** — Save to Navidrome/Plex or download as .m3u
 
 ## Testing Notes

@@ -16,7 +16,7 @@ backend/
 ├── navidrome.py     # Subsonic API client (playlist CRUD + ID sync, with retry logic)
 ├── plex.py          # Plex HTTP API client (playlist CRUD + ID sync, with retry logic)
 ├── popularity.py    # Multi-source enrichment: Deezer + Last.fm + MusicBrainz + track position
-├── mood_scanner.py  # Essentia MTG-Jamendo mood/theme tagging + Last.fm/MusicBrainz tag enrichment
+├── mood_scanner.py  # Essentia-only MTG-Jamendo mood/theme tagging with confidence scores
 ├── scheduler.py     # APScheduler for periodic scans (configurable, default 6h), enrichment (2m), mood scanning
 └── requirements.txt
 
@@ -41,10 +41,10 @@ unraid/
 - **SQLite index** with incremental updates by file mtime, WAL mode for concurrent reads
 - **Auto-migration** via `_migrate()` in `database.py` — new columns added automatically on startup
 - **Two-pass AI** to handle 20–50k song libraries without exceeding context limits:
-  - Pass 1: prompt + compact library summary → structured filters (genres, years, artists, moods, excludes)
+  - Pass 1: prompt + compact library summary → structured filters (genres, years, artists, moods, excludes). System prompt includes the full standardized Essentia mood/theme vocabulary (57 tags) so the AI maps natural language to valid filter terms. Built dynamically via `_build_pass1_system()`.
   - SQLite query narrows to ~500 candidates, biased by popularity with random jitter
   - Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates; skipped when specific artists are requested
-  - Pass 2: prompt + candidate list → final ordered playlist
+  - Pass 2: prompt + candidates in compact semicolon-delimited format with header row (`id;title;artist;genre;yr;dur;bpm;tags;pop`). Mood and theme tags are merged into a single `tags` field. Album field omitted to save tokens. Confidence scores stripped from tags for compact display.
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts
 - **Popularity scoring**: Multi-source enrichment (Deezer rank, Last.fm listeners/playcount, MusicBrainz community ratings, track position heuristic). Confidence-weighted blending. Deezer and MusicBrainz are free with no auth needed.
 - **Deezer rate limiting**: On 429 or quota error, waits 5s and retries. After recovery, slows to 0.5s delay for the rest of the batch.
@@ -100,7 +100,7 @@ docker compose up -d --build
 - **Add metadata fields**: Update `SCHEMA` in `database.py`, update `_extract_metadata()` in `scanner.py`, update `filter_tracks()` if the field should be filterable
 - **Add API endpoints**: Add route in `main.py`, Pydantic models at the top of the file
 - **Add new popularity source**: Add lookup function in `popularity.py`, integrate into `_blend_scores()`, add DB columns in `database.py` with migration support
-- **Add new mood/theme tag source**: Add lookup function in `mood_scanner.py`, add tag aliases to `LASTFM_MOOD_ALIASES`/`LASTFM_THEME_ALIASES` or `MOOD_CATEGORY`/`THEME_CATEGORY` sets
+- **Mood/theme vocabulary**: Mood tags come exclusively from Essentia audio analysis using a fixed vocabulary of 57 canonical tags (31 moods + 26 themes defined in `MOOD_CATEGORY` and `THEME_CATEGORY` sets in `mood_scanner.py`). Tags are stored with confidence scores. The AI receives the full vocabulary in Pass 1 and stripped tag names in Pass 2.
 - **Frontend changes**: Edit `frontend/index.html` (markup), `frontend/assets/app.js` (logic), or `frontend/assets/styles.css` — no build step
 - **Schema changes**: Add columns to `SCHEMA` dict in `database.py`; `_migrate()` handles adding new columns automatically on startup
 
@@ -158,7 +158,6 @@ docker compose up -d --build
 | Mood scan batch size | `50 tracks` | config.py |
 | Mood scan window | `00:00–06:00` (configurable from/to hour) | config.py / scheduler.py |
 | Essentia confidence threshold | `0.1` | mood_scanner.py |
-| Last.fm tag min count | `10` | mood_scanner.py |
 | Default songs in UI | `30` | frontend/index.html |
 | Default duration in UI | `90 min` | frontend/index.html |
 
@@ -184,7 +183,7 @@ docker compose up -d --build
 - Media server ID sync requires Navidrome/Plex to be running and accessible at the configured URL
 - SQLite DB persists at `DB_PATH` (default `/data/navicraft.db`)
 - Popularity enrichment runs in the background every 2 minutes (500 track batches)
-- Mood scanning requires `essentia-tensorflow` (`pip install --pre essentia-tensorflow==2.1b6.dev1389`). The `--pre` flag is required because the package uses pre-release versioning. Models (~80MB) auto-download on first run. CPU-heavy (~2-5s per track). Falls back to API-only tagging if not installed.
+- Mood scanning requires `essentia-tensorflow` (`pip install --pre essentia-tensorflow==2.1b6.dev1389`). The `--pre` flag is required because the package uses pre-release versioning. Models (~80MB) auto-download on first run. CPU-heavy (~2-5s per track). No fallback — Essentia is required for mood scanning.
 - In Docker on Unraid, `NAVIDROME_URL` must use the host IP, not `localhost`
 
 ## Code Style

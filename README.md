@@ -17,8 +17,8 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 
 2b. MOOD/THEME TAG (optional, background)
     Essentia MTG-Jamendo model analyzes audio → mood tags (happy, sad, energetic, ...)
-    + theme tags (film, party, nature, summer, ...).
-    Supplemented with Last.fm user tags and MusicBrainz folksonomy tags.
+    + theme tags (film, party, nature, summer, ...) with confidence scores.
+    Standardized vocabulary of 57 tags ensures consistent, reliable filtering.
     Configurable: batch size, schedule window (e.g. overnight), or continuous mode. Enable in Settings.
 
 3. GENERATE (two-pass AI)
@@ -38,7 +38,7 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
 - **Popularity-aware** — Uses Deezer track rank, Last.fm listener counts, and MusicBrainz community ratings so playlists favour well-known tracks over deep cuts (Deezer and MusicBrainz require no API key)
-- **Mood & theme tagging** — Essentia audio analysis classifies tracks into mood (happy, calm, dark, energetic, ...) and theme (film, party, summer, ...) tags. Supplemented by Last.fm and MusicBrainz user tags. The AI uses these to match prompts like "chill vibes for a road trip" more accurately.
+- **Mood & theme tagging** — Essentia audio analysis classifies tracks into a standardized vocabulary of 31 mood tags (happy, calm, dark, energetic, ...) and 26 theme tags (film, party, summer, ...) with confidence scores. The AI receives the full vocabulary in Pass 1 to map natural language prompts to precise database filters.
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
 - **Artist diversity** — Candidates are capped at 30% of requested song count per artist (min 3) so one artist never dominates; cap is skipped when specific artists are requested
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
@@ -149,14 +149,7 @@ Deezer and MusicBrainz are always available with no configuration needed. Last.f
 
 NaviCraft can analyze your audio files locally to classify tracks into **mood tags** (happy, sad, energetic, calm, dark, uplifting, ...) and **theme tags** (film, party, nature, summer, sport, travel, ...). This helps the AI better match prompts like "chill vibes for a road trip" or "energetic workout mix".
 
-**Sources (combined per track):**
-
-| Source | Type | Notes |
-|--------|------|-------|
-| **Essentia** (MTG-Jamendo) | Local audio analysis | CPU-heavy (~2-5s/track), models auto-download (~80MB) |
-| **File tags** | Existing mood field | Reads mood from ID3/Vorbis/FLAC tags already in your files |
-| **Last.fm** | `track.getTopTags` API | User-applied tags categorized into mood/theme (needs API key) |
-| **MusicBrainz** | Folksonomy tags | Community tags, free, no API key |
+Mood/theme tagging uses **Essentia audio analysis only** (MTG-Jamendo model) to ensure a standardized, consistent vocabulary across your entire library. Tags are stored with confidence scores (e.g. `happy:0.85, energetic:0.72`). The raw file metadata `mood` field remains in the database but is not used for mood filtering.
 
 **Setup:**
 
@@ -174,7 +167,7 @@ Or install it standalone:
 pip install --pre essentia-tensorflow==2.1b6.dev1389
 ```
 
-> **Note:** `essentia-tensorflow` provides pre-built wheels for Linux (x86_64) and macOS (x86_64/arm64) on Python 3.9–3.12. If no wheel is available for your platform, mood scanning falls back to API-only tagging (Last.fm + MusicBrainz + file metadata) — no audio analysis, but still useful.
+> **Note:** `essentia-tensorflow` provides pre-built wheels for Linux (x86_64) and macOS (x86_64/arm64) on Python 3.9–3.12. If no wheel is available for your platform, mood scanning will not be available — Essentia is required.
 
 **How it works:**
 - Enable in Settings under "Mood / Theme Tagging"
@@ -182,8 +175,9 @@ pip install --pre essentia-tensorflow==2.1b6.dev1389
 - Within the window (e.g. midnight–6 AM), batches run back-to-back automatically
 - Use the play/pause button on the mood progress bar to run continuously outside the window
 - On first run, Essentia models (~80MB) are downloaded automatically from `essentia.upf.edu`
-- Tags are stored separately as `mood_tags` and `theme_tags` in the database
-- The AI uses these tags as filters in Pass 1 and as context in Pass 2
+- Tags are stored with confidence scores in separate `mood_tags` and `theme_tags` columns
+- The full standardized vocabulary (57 tags) is provided to the AI in Pass 1 for accurate prompt-to-filter mapping
+- Pass 2 receives tag names (without scores) merged into a single compact field to save tokens
 
 **Troubleshooting:**
 - **"essentia-tensorflow not available"** — The `--pre` flag was likely missing during install. Run `pip install --pre essentia-tensorflow==2.1b6.dev1389`. For Docker, rebuild the image to get the fixed Dockerfile.
@@ -215,7 +209,7 @@ navicraft/
 │   ├── navidrome.py     # Subsonic API client
 │   ├── plex.py          # Plex HTTP API client
 │   ├── popularity.py    # Deezer + Last.fm + MusicBrainz enrichment
-│   ├── mood_scanner.py  # Essentia mood/theme tagging + API tag enrichment
+│   ├── mood_scanner.py  # Essentia-only mood/theme tagging with confidence scores
 │   ├── scheduler.py     # Background scan + enrichment + mood scan jobs
 │   └── requirements.txt
 ├── frontend/
@@ -279,7 +273,7 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 ## Tips
 
 - **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer. Enable mood/theme scanning in Settings to auto-tag tracks via audio analysis.
-- **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data and richer mood/theme tags.
+- **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data.
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
 - **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
 - **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).

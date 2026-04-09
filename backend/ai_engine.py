@@ -50,14 +50,15 @@ def _build_pass1_system() -> str:
 {{"genres":[],"year_min":null,"year_max":null,"artists":[],"moods":[],"bpm_min":null,"bpm_max":null,"keywords":[],"exclude_genres":[],"exclude_artists":[],"exclude_keywords":[]}}
 
 Rules:
-- genres: broad — include related/adjacent genres. For mood-based prompts, include genres that carry that mood.
+- genres: list the specific genres the user asked for, plus closely related sub-genres (e.g. "electronic" → also "electro", "techno", "house", "EDM", "trance", "drum and bass"). Do NOT add distant or unrelated genres just to widen the pool — if the user says "electronic and hip-hop", do not add "rock", "pop", "indie", etc.
 - artists: only if prompt names specific artists/styles. Empty for open prompts.
 - years: null if unconstrained. Refers to ORIGINAL release year, not reissues.
 - moods: ONLY from this vocabulary (unrecognized terms match nothing): {vocab}
-- bpm: set range if tempo matters (workout=120-160, chill=60-100). null otherwise.
+- bpm: set range if tempo matters (workout/gym=120-160, chill=60-100). null otherwise.
 - keywords: terms for song titles, comments, or album names.
 - exclude_*: for "NOT"/"no"/"without" exclusions.
-- Cast a wide net — better too many candidates than too few."""
+- Contextual cues matter: "gym"/"workout"/"running" imply high energy, fast tempo. Reflect this in moods and bpm.
+- Include enough sub-genres to get a good pool, but every genre must be genuinely related to the prompt."""
 
 PASS2_SYSTEM = """Select and order songs from candidates for a playlist. Respond ONLY with JSON (no markdown):
 {"name":"Playlist Name","description":"Brief vibe description","song_ids":[123,456,789]}
@@ -67,7 +68,9 @@ Rules:
 - Return EXACTLY the requested count. Only fewer if not enough candidates.
 - If target duration given, it overrides count — pick songs until total is within ±5min of target using the dur column (m:ss).
 - Order for flow: energy arc, tempo, transitions. Mix artists.
-- Prefer higher popularity (pop 0-100). Avoid deep cuts unless prompt asks for them.
+- GENRE FIDELITY IS CRITICAL: every song you pick MUST fit the genres/mood/context described in the prompt. A popular song that doesn't match the requested genre is a bad pick — skip it regardless of popularity. For example, if the prompt asks for "electronic and hip-hop for the gym", do not include rock, pop, indie, or other off-genre songs even if they are popular.
+- Use popularity as a tiebreaker between songs that equally fit the prompt, not as a primary selection criterion.
+- Match the vibe/energy/context of the prompt (e.g. "gym" = high energy, driving beats).
 """
 
 

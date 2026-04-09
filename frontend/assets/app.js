@@ -183,16 +183,21 @@ function pollScan(){
   setTimeout(()=>{if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null}},600000);
 }
 
+let scanLogTimer=null;
+
 function _showScanLog(entries){
   const el=$('#scanLog');
   el.innerHTML=entries.map(l=>`<div class="scan-log-line">${esc(l)}</div>`).join('');
   el.classList.add('on');
+  if(scanLogTimer)clearTimeout(scanLogTimer);
+  scanLogTimer=setTimeout(()=>{_clearScanLog();scanLogTimer=null},30000);
 }
 
 function _clearScanLog(){
   const el=$('#scanLog');
   el.innerHTML='';
   el.classList.remove('on');
+  if(scanLogTimer){clearTimeout(scanLogTimer);scanLogTimer=null}
 }
 
 // --- Generate (SSE streaming) ---

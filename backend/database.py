@@ -339,7 +339,7 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
                popularity, mood_tags, theme_tags
         FROM tracks
         WHERE {where}
-        ORDER BY (COALESCE(popularity, 50) + ABS(RANDOM()) % 20) DESC
+        ORDER BY (COALESCE(popularity, 50) * 0.6 + ABS(RANDOM()) % 50) DESC
         LIMIT ?
     """, params).fetchall()
 

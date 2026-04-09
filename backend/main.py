@@ -423,10 +423,12 @@ async def trigger_scan(full: bool = False):
     if _scan_lock.locked():
         raise HTTPException(409, detail="Scan already in progress")
 
+    # Set phase immediately so the frontend never sees a stale "idle" before the task starts
+    _scan_progress.update(phase="starting", message="Starting scan...", log=[])
+
     async def run_scan():
         async with _scan_lock:
             log = []
-            _scan_progress["log"] = []
 
             def progress(phase, current, total, msg):
                 _scan_progress.update(phase=phase, current=current, total=total, message=msg)
@@ -522,11 +524,9 @@ async def trigger_scan(full: bool = False):
 
             _scan_progress.update(phase="idle", message="Ready", log=log)
 
-            # Clear log after 5s so a later page refresh won't re-show it
-            await asyncio.sleep(5)
-            _scan_progress["log"] = []
-
-            return stats
+        # Clear log after 30s (outside the lock so other scans aren't blocked)
+        await asyncio.sleep(30)
+        _scan_progress["log"] = []
 
     asyncio.create_task(run_scan())
     return {"status": "started", "full": full}

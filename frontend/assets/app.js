@@ -163,20 +163,18 @@ function pollScan(){
   scanPollTimer=setInterval(async()=>{
     try{
       const s=await api('/scan/status');
-      if(s.scanning){
+      if(s.phase==='idle'){
+        clearInterval(scanPollTimer);
+        scanPollTimer=null;
+        $('#scanBar').classList.remove('on');
+        loadStats();
+        if(s.log&&s.log.length) _showScanLog(s.log);
+      }else if(s.scanning){
         $('#scanBar').classList.add('on');
         $('#scanMsg').textContent=s.message||'Scanning...';
         $('#scanPct').textContent=s.total?`${s.current}/${s.total}`:'';
       }else{
         $('#scanBar').classList.remove('on');
-        if(s.phase==='idle'){
-          clearInterval(scanPollTimer);
-          scanPollTimer=null;
-          loadStats();
-          if(s.log&&s.log.length){
-            _showScanLog(s.log);
-          }
-        }
       }
     }catch{}
   },1500);
@@ -184,32 +182,27 @@ function pollScan(){
 }
 
 let scanLogTimer=null;
-let scanLogShownAt=0;
 
 function _showScanLog(entries){
   const el=$('#scanLog');
+  el.onclick=null;
   el.innerHTML=entries.map(l=>{
     const m=l.match(/^(.*?)(\s*\([^)]+\))$/);
     if(m)return`<div class="scan-log-line">${esc(m[1].trim())}<br><span class="scan-log-sub">${esc(m[2].trim())}</span></div>`;
     return`<div class="scan-log-line">${esc(l)}</div>`;
   }).join('');
   el.classList.add('on');
-  scanLogShownAt=Date.now();
   if(scanLogTimer)clearTimeout(scanLogTimer);
   scanLogTimer=setTimeout(()=>{_clearScanLog();scanLogTimer=null},30000);
+  setTimeout(()=>{ el.onclick=_clearScanLog; },500);
 }
 
 function _clearScanLog(){
   const el=$('#scanLog');
+  el.onclick=null;
   el.innerHTML='';
   el.classList.remove('on');
-  scanLogShownAt=0;
   if(scanLogTimer){clearTimeout(scanLogTimer);scanLogTimer=null}
-}
-
-function _dismissScanLog(){
-  if(Date.now()-scanLogShownAt<1500)return;
-  _clearScanLog();
 }
 
 // --- Generate (SSE streaming) ---

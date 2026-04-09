@@ -62,6 +62,7 @@ unraid/
 - **Song ID normalisation**: AI responses may return song IDs as strings; backend casts to `int` before candidate map lookup to prevent mismatches.
 - **AI errors surfaced to UI**: API error messages are extracted from JSON responses and raised as `ValueError` so they propagate through the SSE error event to the frontend instead of showing a generic "check logs" message.
 - **UI-configurable settings**: Navidrome, Plex, AI provider/keys/models, Last.fm API key, scan interval, timezone, and mood scan settings (including schedule window from/to hour) are configurable from the Settings gear icon in the web UI. Saved to `/data/navicraft_config.json`. Env vars act as initial defaults; JSON config takes precedence. Secrets are masked in API responses.
+- **Database health check & cleanup**: Runs automatically after every manual scan (logo click). Checks for orphaned tracks (files missing from disk), tracks with missing metadata, stale enrichment entries (checked but no data), and excess scan logs. Automatically cleans any issues found: removes orphans and metadata-less tracks, resets stale enrichment timestamps for retry, prunes scan logs, and vacuums the DB. Results appear as a scan log below the generate button, auto-dismissed after 30s. The log is also cleared on page refresh and when generating a playlist.
 
 ## Running Locally
 
@@ -118,8 +119,8 @@ docker compose up -d --build
 | GET | `/api/library/stats` | Library stats (song/album/artist counts, duration, genres) |
 | GET | `/api/library/genres` | List all genres with counts |
 | GET | `/api/library/search?q=` | Search tracks by text (max 50 results) |
-| POST | `/api/scan?full=false` | Trigger library scan (incremental or full) |
-| GET | `/api/scan/status` | Current scan progress |
+| POST | `/api/scan?full=false` | Trigger library scan (incremental or full) + health check + auto-cleanup |
+| GET | `/api/scan/status` | Current scan progress + log (includes health check/cleanup results) |
 | POST | `/api/generate` | Generate playlist via SSE stream (rate limited 10s) |
 | POST | `/api/playlists` | Save playlist to media server (accepts `server` param) |
 | GET | `/api/playlists` | List playlists from media server (accepts `server` query) |
@@ -167,7 +168,7 @@ docker compose up -d --build
 - **Settings modal** — gear icon in header opens config panel for Navidrome, Plex, AI provider/keys/models, Last.fm, scan interval, and mood/theme tagging settings; persists to `/data/navicraft_config.json`
 - **Media server status indicators** — green/red dots in header for each configured server (Navidrome and/or Plex); click to retest
 - **Server selector** — pill toggle (Navidrome / Plex) shown when both servers are configured; controls where playlists are saved
-- **Rescan trigger** — click the ♪ logo mark to trigger an incremental library scan
+- **Rescan trigger** — click the ♪ logo mark to trigger an incremental library scan + health check + auto-cleanup; results shown as a scan log below the generate button (auto-dismissed after 30s, cleared on page refresh or generate)
 - **AI provider selector** — pill toggle (Claude / Gemini) shown only when both keys are configured
 - **Mode toggle** — Songs (count) or Duration (minutes), one input visible at a time; number inputs have no spinners, clamp to 1–999
 - **Preview toggle** — when ON, shows results before saving; when OFF, auto-saves to selected media server on generation

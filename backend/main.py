@@ -521,6 +521,11 @@ async def trigger_scan(full: bool = False):
                 log.append("Health check failed")
 
             _scan_progress.update(phase="idle", message="Ready", log=log)
+
+            # Clear log after 5s so a later page refresh won't re-show it
+            await asyncio.sleep(5)
+            _scan_progress["log"] = []
+
             return stats
 
     asyncio.create_task(run_scan())

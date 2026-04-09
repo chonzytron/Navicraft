@@ -187,7 +187,11 @@ let scanLogTimer=null;
 
 function _showScanLog(entries){
   const el=$('#scanLog');
-  el.innerHTML=entries.map(l=>`<div class="scan-log-line">${esc(l)}</div>`).join('');
+  el.innerHTML=entries.map(l=>{
+    const m=l.match(/^(.*?)(\s*\([^)]+\))$/);
+    if(m)return`<div class="scan-log-line">${esc(m[1].trim())}<br><span class="scan-log-sub">${esc(m[2].trim())}</span></div>`;
+    return`<div class="scan-log-line">${esc(l)}</div>`;
+  }).join('');
   el.classList.add('on');
   if(scanLogTimer)clearTimeout(scanLogTimer);
   scanLogTimer=setTimeout(()=>{_clearScanLog();scanLogTimer=null},30000);

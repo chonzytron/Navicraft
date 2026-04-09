@@ -6,6 +6,8 @@ Main FastAPI application.
 import asyncio
 import json
 import logging
+import os
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
@@ -210,6 +212,89 @@ async def update_config(body: dict):
             raise HTTPException(400, detail="mood_scan_to_hour must be 0–23")
     config.update_from_dict(body)
     return {"status": "ok", "config": config.get_editable()}
+
+
+# =========================================================================
+# Database Health Check & Cleanup
+# =========================================================================
+
+def _find_orphaned_paths(all_paths: set) -> list:
+    """Check which DB paths no longer exist on disk."""
+    return [p for p in all_paths if not os.path.exists(p)]
+
+
+@app.get("/api/db/health")
+async def db_health_check():
+    """Run database health checks and return a diagnostic report."""
+    db_size = os.path.getsize(config.db_path) if os.path.exists(config.db_path) else 0
+
+    with db.get_db() as conn:
+        total = db.execute_count(conn, "SELECT COUNT(*) as cnt FROM tracks")
+        missing_metadata = db.count_tracks_without_title(conn)
+        all_paths = db.get_all_paths(conn)
+        stale_enrichment = db.count_stale_enrichment(conn)
+        scan_log_count = db.count_scan_logs(conn)
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+
+    # Check orphaned tracks in thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    orphaned_paths = await loop.run_in_executor(None, _find_orphaned_paths, all_paths)
+
+    return {
+        "db_size_bytes": db_size,
+        "total_tracks": total,
+        "orphaned_tracks": len(orphaned_paths),
+        "missing_metadata": missing_metadata,
+        "stale_enrichment": stale_enrichment,
+        "scan_log_count": scan_log_count,
+        "integrity_ok": integrity == "ok",
+    }
+
+
+@app.post("/api/db/cleanup")
+async def db_cleanup():
+    """Clean up database issues found by health check."""
+    results = {}
+
+    # 1. Remove orphaned tracks
+    with db.get_db() as conn:
+        all_paths = db.get_all_paths(conn)
+
+    loop = asyncio.get_event_loop()
+    orphaned_paths = await loop.run_in_executor(None, _find_orphaned_paths, all_paths)
+
+    if orphaned_paths:
+        with db.get_db() as conn:
+            db.remove_tracks(conn, orphaned_paths)
+        results["orphans_removed"] = len(orphaned_paths)
+    else:
+        results["orphans_removed"] = 0
+
+    # 2. Remove tracks without metadata
+    with db.get_db() as conn:
+        results["metadata_removed"] = db.remove_tracks_without_title(conn)
+
+    # 3. Reset stale enrichment timestamps
+    with db.get_db() as conn:
+        results["enrichment_reset"] = db.reset_stale_enrichment(conn)
+
+    # 4. Prune old scan logs
+    with db.get_db() as conn:
+        results["scan_logs_pruned"] = db.prune_scan_logs(conn, keep=50)
+
+    # 5. Vacuum database
+    conn = sqlite3.connect(config.db_path, timeout=30)
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    results["vacuumed"] = True
+
+    db_size = os.path.getsize(config.db_path) if os.path.exists(config.db_path) else 0
+    results["db_size_bytes"] = db_size
+
+    logger.info("DB cleanup complete: %s", results)
+    return {"status": "ok", "results": results}
 
 
 @app.get("/api/servers")

@@ -724,6 +724,64 @@ def get_theme_tag_summary(db: sqlite3.Connection) -> list[dict]:
     return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
 
 
+# --- Health Check & Cleanup ---
+
+def count_tracks_without_title(db: sqlite3.Connection) -> int:
+    """Count tracks with NULL title (incomplete/failed scans)."""
+    row = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NULL").fetchone()
+    return row["cnt"]
+
+
+def count_stale_enrichment(db: sqlite3.Connection) -> dict:
+    """Count tracks that were checked by enrichment sources but returned no data."""
+    deezer = db.execute(
+        "SELECT COUNT(*) as cnt FROM tracks WHERE deezer_checked_at IS NOT NULL AND deezer_rank IS NULL AND title IS NOT NULL"
+    ).fetchone()["cnt"]
+    lastfm = db.execute(
+        "SELECT COUNT(*) as cnt FROM tracks WHERE lastfm_checked_at IS NOT NULL AND lastfm_listeners IS NULL AND title IS NOT NULL"
+    ).fetchone()["cnt"]
+    musicbrainz = db.execute(
+        "SELECT COUNT(*) as cnt FROM tracks WHERE musicbrainz_checked_at IS NOT NULL AND musicbrainz_rating IS NULL AND title IS NOT NULL"
+    ).fetchone()["cnt"]
+    return {"deezer": deezer, "lastfm": lastfm, "musicbrainz": musicbrainz}
+
+
+def remove_tracks_without_title(db: sqlite3.Connection) -> int:
+    """Remove tracks with NULL title (incomplete/failed scans)."""
+    cursor = db.execute("DELETE FROM tracks WHERE title IS NULL")
+    return cursor.rowcount
+
+
+def reset_stale_enrichment(db: sqlite3.Connection) -> dict:
+    """Reset checked_at timestamps for tracks that were checked but got no data,
+    so they will be retried in the next enrichment cycle."""
+    d = db.execute(
+        "UPDATE tracks SET deezer_checked_at = NULL WHERE deezer_checked_at IS NOT NULL AND deezer_rank IS NULL"
+    ).rowcount
+    l = db.execute(
+        "UPDATE tracks SET lastfm_checked_at = NULL WHERE lastfm_checked_at IS NOT NULL AND lastfm_listeners IS NULL"
+    ).rowcount
+    m = db.execute(
+        "UPDATE tracks SET musicbrainz_checked_at = NULL WHERE musicbrainz_checked_at IS NOT NULL AND musicbrainz_rating IS NULL"
+    ).rowcount
+    return {"deezer": d, "lastfm": l, "musicbrainz": m}
+
+
+def count_scan_logs(db: sqlite3.Connection) -> int:
+    """Count total scan log entries."""
+    row = db.execute("SELECT COUNT(*) as cnt FROM scan_log").fetchone()
+    return row["cnt"]
+
+
+def prune_scan_logs(db: sqlite3.Connection, keep: int = 50) -> int:
+    """Remove old scan log entries, keeping the most recent `keep`."""
+    cursor = db.execute(
+        "DELETE FROM scan_log WHERE id NOT IN (SELECT id FROM scan_log ORDER BY id DESC LIMIT ?)",
+        (keep,),
+    )
+    return cursor.rowcount
+
+
 # --- Settings ---
 
 def get_setting(db: sqlite3.Connection, key: str, default: str | None = None) -> str | None:

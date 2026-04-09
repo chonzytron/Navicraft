@@ -34,7 +34,7 @@ logger = logging.getLogger("navicraft")
 
 # Track ongoing scan
 _scan_lock = asyncio.Lock()
-_scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": ""}
+_scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": "", "log": []}
 
 # Rate limiting for /api/generate
 _last_generate_time = 0.0
@@ -214,87 +214,9 @@ async def update_config(body: dict):
     return {"status": "ok", "config": config.get_editable()}
 
 
-# =========================================================================
-# Database Health Check & Cleanup
-# =========================================================================
-
 def _find_orphaned_paths(all_paths: set) -> list:
     """Check which DB paths no longer exist on disk."""
     return [p for p in all_paths if not os.path.exists(p)]
-
-
-@app.get("/api/db/health")
-async def db_health_check():
-    """Run database health checks and return a diagnostic report."""
-    db_size = os.path.getsize(config.db_path) if os.path.exists(config.db_path) else 0
-
-    with db.get_db() as conn:
-        total = db.execute_count(conn, "SELECT COUNT(*) as cnt FROM tracks")
-        missing_metadata = db.count_tracks_without_title(conn)
-        all_paths = db.get_all_paths(conn)
-        stale_enrichment = db.count_stale_enrichment(conn)
-        scan_log_count = db.count_scan_logs(conn)
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-
-    # Check orphaned tracks in thread pool to avoid blocking
-    loop = asyncio.get_event_loop()
-    orphaned_paths = await loop.run_in_executor(None, _find_orphaned_paths, all_paths)
-
-    return {
-        "db_size_bytes": db_size,
-        "total_tracks": total,
-        "orphaned_tracks": len(orphaned_paths),
-        "missing_metadata": missing_metadata,
-        "stale_enrichment": stale_enrichment,
-        "scan_log_count": scan_log_count,
-        "integrity_ok": integrity == "ok",
-    }
-
-
-@app.post("/api/db/cleanup")
-async def db_cleanup():
-    """Clean up database issues found by health check."""
-    results = {}
-
-    # 1. Remove orphaned tracks
-    with db.get_db() as conn:
-        all_paths = db.get_all_paths(conn)
-
-    loop = asyncio.get_event_loop()
-    orphaned_paths = await loop.run_in_executor(None, _find_orphaned_paths, all_paths)
-
-    if orphaned_paths:
-        with db.get_db() as conn:
-            db.remove_tracks(conn, orphaned_paths)
-        results["orphans_removed"] = len(orphaned_paths)
-    else:
-        results["orphans_removed"] = 0
-
-    # 2. Remove tracks without metadata
-    with db.get_db() as conn:
-        results["metadata_removed"] = db.remove_tracks_without_title(conn)
-
-    # 3. Reset stale enrichment timestamps
-    with db.get_db() as conn:
-        results["enrichment_reset"] = db.reset_stale_enrichment(conn)
-
-    # 4. Prune old scan logs
-    with db.get_db() as conn:
-        results["scan_logs_pruned"] = db.prune_scan_logs(conn, keep=50)
-
-    # 5. Vacuum database
-    conn = sqlite3.connect(config.db_path, timeout=30)
-    try:
-        conn.execute("VACUUM")
-    finally:
-        conn.close()
-    results["vacuumed"] = True
-
-    db_size = os.path.getsize(config.db_path) if os.path.exists(config.db_path) else 0
-    results["db_size_bytes"] = db_size
-
-    logger.info("DB cleanup complete: %s", results)
-    return {"status": "ok", "results": results}
 
 
 @app.get("/api/servers")
@@ -503,24 +425,41 @@ async def trigger_scan(full: bool = False):
 
     async def run_scan():
         async with _scan_lock:
+            log = []
+            _scan_progress["log"] = []
+
             def progress(phase, current, total, msg):
                 _scan_progress.update(phase=phase, current=current, total=total, message=msg)
 
             stats = await scanner.scan_library(full_scan=full, progress_cb=progress)
+
+            # Build scan summary from the scan_log table
+            with db.get_db() as conn:
+                last = db.get_last_scan(conn)
+            if last:
+                added = last.get("tracks_added", 0) or 0
+                updated = last.get("tracks_updated", 0) or 0
+                removed = last.get("tracks_removed", 0) or 0
+                scanned = last.get("tracks_scanned", 0) or 0
+                log.append(f"Scanned {scanned:,} tracks ({added} added, {updated} updated, {removed} removed)")
 
             # Sync media server IDs after scan
             if config.navidrome_url and config.navidrome_password:
                 try:
                     _scan_progress.update(phase="syncing", message="Syncing Navidrome IDs...")
                     await navidrome.sync_navidrome_ids()
+                    log.append("Synced Navidrome IDs")
                 except Exception:
                     logger.warning("Navidrome ID sync failed after scan")
+                    log.append("Navidrome ID sync failed")
             if config.plex_url and config.plex_token:
                 try:
                     _scan_progress.update(phase="syncing", message="Syncing Plex IDs...")
                     await plex.sync_plex_ids()
+                    log.append("Synced Plex IDs")
                 except Exception:
                     logger.warning("Plex ID sync failed after scan")
+                    log.append("Plex ID sync failed")
 
             # Enrich new tracks with popularity data
             try:
@@ -529,7 +468,59 @@ async def trigger_scan(full: bool = False):
             except Exception:
                 logger.warning("Popularity enrichment failed after scan")
 
-            _scan_progress.update(phase="idle", message="Ready")
+            # --- Health check & cleanup ---
+            _scan_progress.update(phase="health_check", message="Running health check...")
+            try:
+                loop = asyncio.get_event_loop()
+                with db.get_db() as conn:
+                    all_paths = db.get_all_paths(conn)
+                    missing_metadata = db.count_tracks_without_title(conn)
+                    stale = db.count_stale_enrichment(conn)
+                    scan_log_count = db.count_scan_logs(conn)
+
+                orphaned = await loop.run_in_executor(None, _find_orphaned_paths, all_paths)
+
+                needs_cleanup = (
+                    len(orphaned) > 0
+                    or missing_metadata > 0
+                    or stale["deezer"] + stale["lastfm"] + stale["musicbrainz"] > 0
+                    or scan_log_count > 50
+                )
+
+                if needs_cleanup:
+                    _scan_progress.update(phase="cleanup", message="Cleaning up...")
+                    if orphaned:
+                        with db.get_db() as conn:
+                            db.remove_tracks(conn, orphaned)
+                        log.append(f"Removed {len(orphaned)} orphaned track{'s' if len(orphaned) != 1 else ''}")
+                    if missing_metadata > 0:
+                        with db.get_db() as conn:
+                            db.remove_tracks_without_title(conn)
+                        log.append(f"Removed {missing_metadata} track{'s' if missing_metadata != 1 else ''} with missing metadata")
+                    stale_total = stale["deezer"] + stale["lastfm"] + stale["musicbrainz"]
+                    if stale_total > 0:
+                        with db.get_db() as conn:
+                            db.reset_stale_enrichment(conn)
+                        log.append(f"Reset {stale_total} stale enrichment entr{'ies' if stale_total != 1 else 'y'} for retry")
+                    if scan_log_count > 50:
+                        with db.get_db() as conn:
+                            pruned = db.prune_scan_logs(conn, keep=50)
+                        log.append(f"Pruned {pruned} old scan log{'s' if pruned != 1 else ''}")
+                    # Vacuum
+                    vconn = sqlite3.connect(config.db_path, timeout=30)
+                    try:
+                        vconn.execute("VACUUM")
+                    finally:
+                        vconn.close()
+                    db_size = os.path.getsize(config.db_path) if os.path.exists(config.db_path) else 0
+                    log.append(f"Database vacuumed ({db_size / 1048576:.1f} MB)")
+                else:
+                    log.append("Database is healthy")
+            except Exception:
+                logger.exception("Health check/cleanup failed")
+                log.append("Health check failed")
+
+            _scan_progress.update(phase="idle", message="Ready", log=log)
             return stats
 
     asyncio.create_task(run_scan())

@@ -151,6 +151,7 @@ function setMode(m){
 // --- Scan ---
 async function triggerScan(){
   try{
+    _clearScanLog();
     await api('/scan',{method:'POST'});
     toast('Scan started','info');
     pollScan();
@@ -172,11 +173,26 @@ function pollScan(){
           clearInterval(scanPollTimer);
           scanPollTimer=null;
           loadStats();
+          if(s.log&&s.log.length){
+            _showScanLog(s.log);
+          }
         }
       }
     }catch{}
   },1500);
   setTimeout(()=>{if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null}},600000);
+}
+
+function _showScanLog(entries){
+  const el=$('#scanLog');
+  el.innerHTML=entries.map(l=>`<div class="scan-log-line">${esc(l)}</div>`).join('');
+  el.classList.add('on');
+}
+
+function _clearScanLog(){
+  const el=$('#scanLog');
+  el.innerHTML='';
+  el.classList.remove('on');
 }
 
 // --- Generate (SSE streaming) ---
@@ -200,6 +216,7 @@ async function generate(){
   const targetMin=activeMode==='duration'?parseInt($('#targetMin').value)||90:null;
   const autoCreate=!$('#previewToggle').classList.contains('on');
 
+  _clearScanLog();
   $('#genBtn').disabled=true;
   $('#results').classList.remove('on');
   $('#loading').classList.add('on');
@@ -456,94 +473,6 @@ async function toggleContinuousMood(){
     // Revert on failure
     $('#moodLabel').classList.toggle('active',isPlaying);
     toast(`Failed: ${e.message}`,'error');
-  }
-}
-
-// --- Database health check ---
-function _fmtBytes(b){
-  if(b<1024)return b+' B';
-  if(b<1048576)return(b/1024).toFixed(1)+' KB';
-  return(b/1048576).toFixed(1)+' MB';
-}
-
-async function runHealthCheck(){
-  const btn=$('#dbHealthBtn');
-  const report=$('#dbHealthReport');
-  const stats=$('#dbHealthStats');
-  const issues=$('#dbHealthIssues');
-  const cleanBtn=$('#dbCleanupBtn');
-  const result=$('#dbCleanupResult');
-  btn.disabled=true;btn.textContent='Checking...';
-  report.style.display='none';
-  cleanBtn.style.display='none';
-  result.style.display='none';
-  try{
-    const h=await api('/db/health');
-    let statsHtml=`<div class="db-stat"><span class="db-stat-label">Database size</span><span>${_fmtBytes(h.db_size_bytes)}</span></div>`;
-    statsHtml+=`<div class="db-stat"><span class="db-stat-label">Total tracks</span><span>${num(h.total_tracks)}</span></div>`;
-    statsHtml+=`<div class="db-stat"><span class="db-stat-label">Integrity</span><span class="${h.integrity_ok?'db-ok':'db-err'}">${h.integrity_ok?'OK':'FAILED'}</span></div>`;
-    stats.innerHTML=statsHtml;
-
-    let issueCount=0;
-    let issuesHtml='';
-    if(h.orphaned_tracks>0){
-      issuesHtml+=`<div class="db-issue"><span class="db-issue-dot"></span>${h.orphaned_tracks} orphaned track${h.orphaned_tracks===1?'':'s'} (missing files)</div>`;
-      issueCount+=h.orphaned_tracks;
-    }
-    if(h.missing_metadata>0){
-      issuesHtml+=`<div class="db-issue"><span class="db-issue-dot"></span>${h.missing_metadata} track${h.missing_metadata===1?'':'s'} with missing metadata</div>`;
-      issueCount+=h.missing_metadata;
-    }
-    const stale=h.stale_enrichment;
-    const staleTotal=(stale.deezer||0)+(stale.lastfm||0)+(stale.musicbrainz||0);
-    if(staleTotal>0){
-      issuesHtml+=`<div class="db-issue"><span class="db-issue-dot"></span>${staleTotal} stale enrichment entr${staleTotal===1?'y':'ies'} (Dz:${stale.deezer} Lf:${stale.lastfm} Mb:${stale.musicbrainz})</div>`;
-      issueCount+=staleTotal;
-    }
-    if(h.scan_log_count>50){
-      const excess=h.scan_log_count-50;
-      issuesHtml+=`<div class="db-issue"><span class="db-issue-dot"></span>${excess} old scan log${excess===1?'':'s'} to prune</div>`;
-      issueCount++;
-    }
-
-    if(issueCount===0){
-      issuesHtml=`<div class="db-ok-msg">No issues found</div>`;
-    }
-    issues.innerHTML=issuesHtml;
-    cleanBtn.style.display=issueCount>0?'':'none';
-    report.style.display='';
-  }catch(e){
-    toast(`Health check failed: ${e.message}`,'error');
-  }finally{
-    btn.disabled=false;btn.textContent='Run Health Check';
-  }
-}
-
-async function runCleanup(){
-  const btn=$('#dbCleanupBtn');
-  const result=$('#dbCleanupResult');
-  btn.disabled=true;btn.textContent='Cleaning...';
-  result.style.display='none';
-  try{
-    const r=await api('/db/cleanup',{method:'POST'});
-    const d=r.results;
-    let lines=[];
-    if(d.orphans_removed>0)lines.push(`Removed ${d.orphans_removed} orphaned track${d.orphans_removed===1?'':'s'}`);
-    if(d.metadata_removed>0)lines.push(`Removed ${d.metadata_removed} track${d.metadata_removed===1?'':'s'} without metadata`);
-    const er=d.enrichment_reset;
-    const erTotal=(er.deezer||0)+(er.lastfm||0)+(er.musicbrainz||0);
-    if(erTotal>0)lines.push(`Reset ${erTotal} stale enrichment entr${erTotal===1?'y':'ies'}`);
-    if(d.scan_logs_pruned>0)lines.push(`Pruned ${d.scan_logs_pruned} old scan log${d.scan_logs_pruned===1?'':'s'}`);
-    lines.push(`Database vacuumed (${_fmtBytes(d.db_size_bytes)})`);
-    result.innerHTML=lines.map(l=>`<div class="db-result-line">${l}</div>`).join('');
-    result.style.display='';
-    btn.style.display='none';
-    toast('Database cleaned up','success');
-    loadStats();
-  }catch(e){
-    toast(`Cleanup failed: ${e.message}`,'error');
-  }finally{
-    btn.disabled=false;btn.textContent='Clean Up';
   }
 }
 

@@ -124,6 +124,9 @@
     </div>
   </div>
 
+  <!-- Scan Log -->
+  <div class="scan-log" id="scanLog"></div>
+
   <!-- Loading -->
   <div class="loading" id="loading">
     <div class="spinner"></div>
@@ -290,18 +293,6 @@
             <span>Schedule To</span>
             <select id="cfgMoodScanToHour"></select>
           </label>
-        </div>
-      </div>
-      <div class="cfg-section">
-        <h3>Database Health</h3>
-        <div class="db-health" id="dbHealth">
-          <button class="btn btn-ghost db-health-btn" id="dbHealthBtn" onclick="runHealthCheck()">Run Health Check</button>
-          <div class="db-health-report" id="dbHealthReport" style="display:none">
-            <div class="db-health-stats" id="dbHealthStats"></div>
-            <div class="db-health-issues" id="dbHealthIssues"></div>
-            <button class="btn btn-primary db-health-btn" id="dbCleanupBtn" onclick="runCleanup()" style="display:none">Clean Up</button>
-            <div class="db-health-result" id="dbCleanupResult" style="display:none"></div>
-          </div>
         </div>
       </div>
     </div>

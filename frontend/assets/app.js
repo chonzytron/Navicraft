@@ -154,27 +154,27 @@ async function triggerScan(){
     _clearScanLog();
     await api('/scan',{method:'POST'});
     toast('Scan started','info');
-    pollScan();
+    pollScan(true);
   }catch(e){toast(e.message,'error')}
 }
 
-function pollScan(){
+function pollScan(showLog=false){
   if(scanPollTimer)clearInterval(scanPollTimer);
+  let seenActive=false;
   scanPollTimer=setInterval(async()=>{
     try{
       const s=await api('/scan/status');
-      if(s.phase==='idle'){
+      if(s.phase!=='idle')seenActive=true;
+      if(s.phase==='idle'&&(seenActive||!s.scanning)){
         clearInterval(scanPollTimer);
         scanPollTimer=null;
         $('#scanBar').classList.remove('on');
-        loadStats();
-        if(s.log&&s.log.length) _showScanLog(s.log);
-      }else if(s.scanning){
+        if(seenActive)loadStats();
+        if(showLog&&s.log&&s.log.length) _showScanLog(s.log);
+      }else if(s.phase!=='idle'){
         $('#scanBar').classList.add('on');
         $('#scanMsg').textContent=s.message||'Scanning...';
         $('#scanPct').textContent=s.total?`${s.current}/${s.total}`:'';
-      }else{
-        $('#scanBar').classList.remove('on');
       }
     }catch{}
   },1500);

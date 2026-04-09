@@ -733,15 +733,20 @@ def count_tracks_without_title(db: sqlite3.Connection) -> int:
 
 
 def count_stale_enrichment(db: sqlite3.Connection) -> dict:
-    """Count tracks that were checked by enrichment sources but returned no data."""
+    """Count tracks that were checked by enrichment sources but returned no data
+    and are older than 7 days (to avoid resetting recent 'not found' results)."""
+    cutoff = time.time() - 604800  # 7 days
     deezer = db.execute(
-        "SELECT COUNT(*) as cnt FROM tracks WHERE deezer_checked_at IS NOT NULL AND deezer_rank IS NULL AND title IS NOT NULL"
+        "SELECT COUNT(*) as cnt FROM tracks WHERE deezer_checked_at IS NOT NULL AND deezer_checked_at < ? AND deezer_rank IS NULL AND title IS NOT NULL",
+        (cutoff,)
     ).fetchone()["cnt"]
     lastfm = db.execute(
-        "SELECT COUNT(*) as cnt FROM tracks WHERE lastfm_checked_at IS NOT NULL AND lastfm_listeners IS NULL AND title IS NOT NULL"
+        "SELECT COUNT(*) as cnt FROM tracks WHERE lastfm_checked_at IS NOT NULL AND lastfm_checked_at < ? AND lastfm_listeners IS NULL AND title IS NOT NULL",
+        (cutoff,)
     ).fetchone()["cnt"]
     musicbrainz = db.execute(
-        "SELECT COUNT(*) as cnt FROM tracks WHERE musicbrainz_checked_at IS NOT NULL AND musicbrainz_rating IS NULL AND title IS NOT NULL"
+        "SELECT COUNT(*) as cnt FROM tracks WHERE musicbrainz_checked_at IS NOT NULL AND musicbrainz_checked_at < ? AND musicbrainz_rating IS NULL AND title IS NOT NULL",
+        (cutoff,)
     ).fetchone()["cnt"]
     return {"deezer": deezer, "lastfm": lastfm, "musicbrainz": musicbrainz}
 
@@ -753,16 +758,21 @@ def remove_tracks_without_title(db: sqlite3.Connection) -> int:
 
 
 def reset_stale_enrichment(db: sqlite3.Connection) -> dict:
-    """Reset checked_at timestamps for tracks that were checked but got no data,
-    so they will be retried in the next enrichment cycle."""
+    """Reset checked_at timestamps for tracks that were checked but got no data
+    and are older than 7 days. Recent 'not found' results are preserved so
+    the enrichment 24h cooldown isn't bypassed on every scan."""
+    cutoff = time.time() - 604800  # 7 days
     d = db.execute(
-        "UPDATE tracks SET deezer_checked_at = NULL WHERE deezer_checked_at IS NOT NULL AND deezer_rank IS NULL"
+        "UPDATE tracks SET deezer_checked_at = NULL WHERE deezer_checked_at IS NOT NULL AND deezer_checked_at < ? AND deezer_rank IS NULL",
+        (cutoff,)
     ).rowcount
     l = db.execute(
-        "UPDATE tracks SET lastfm_checked_at = NULL WHERE lastfm_checked_at IS NOT NULL AND lastfm_listeners IS NULL"
+        "UPDATE tracks SET lastfm_checked_at = NULL WHERE lastfm_checked_at IS NOT NULL AND lastfm_checked_at < ? AND lastfm_listeners IS NULL",
+        (cutoff,)
     ).rowcount
     m = db.execute(
-        "UPDATE tracks SET musicbrainz_checked_at = NULL WHERE musicbrainz_checked_at IS NOT NULL AND musicbrainz_rating IS NULL"
+        "UPDATE tracks SET musicbrainz_checked_at = NULL WHERE musicbrainz_checked_at IS NOT NULL AND musicbrainz_checked_at < ? AND musicbrainz_rating IS NULL",
+        (cutoff,)
     ).rowcount
     return {"deezer": d, "lastfm": l, "musicbrainz": m}
 

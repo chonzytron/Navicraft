@@ -184,6 +184,7 @@ function pollScan(){
 }
 
 let scanLogTimer=null;
+let scanLogShownAt=0;
 
 function _showScanLog(entries){
   const el=$('#scanLog');
@@ -193,6 +194,7 @@ function _showScanLog(entries){
     return`<div class="scan-log-line">${esc(l)}</div>`;
   }).join('');
   el.classList.add('on');
+  scanLogShownAt=Date.now();
   if(scanLogTimer)clearTimeout(scanLogTimer);
   scanLogTimer=setTimeout(()=>{_clearScanLog();scanLogTimer=null},30000);
 }
@@ -201,7 +203,13 @@ function _clearScanLog(){
   const el=$('#scanLog');
   el.innerHTML='';
   el.classList.remove('on');
+  scanLogShownAt=0;
   if(scanLogTimer){clearTimeout(scanLogTimer);scanLogTimer=null}
+}
+
+function _dismissScanLog(){
+  if(Date.now()-scanLogShownAt<1500)return;
+  _clearScanLog();
 }
 
 // --- Generate (SSE streaming) ---

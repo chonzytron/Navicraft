@@ -425,14 +425,9 @@ function pollEnrichment(){
 let moodTimer=null;
 function _updateMoodUI(s){
   const pct=Math.round(s.percent??0);
-  const incomplete=s.remaining>0;
-  if(incomplete||s.running||s.continuous){
-    $('#moodBar').classList.add('on');
-    $('#moodFill').style.width=`${pct}%`;
-    $('#moodText').textContent=`${pct}%`;
-  }else{
-    $('#moodBar').classList.remove('on');
-  }
+  $('#moodBar').classList.add('on');
+  $('#moodFill').style.width=`${pct}%`;
+  $('#moodText').textContent=`${pct}%`;
   $('#moodLabel').classList.toggle('active',!!s.continuous);
   $('#moodLabel').title=s.continuous?'Click to pause':'Click to start continuous scanning';
 }

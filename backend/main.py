@@ -584,13 +584,31 @@ async def generate_playlist(req: GenerateRequest):
             with db.get_db() as conn:
                 candidates = db.filter_tracks(conn, filters, limit=config.max_candidates, max_songs=req.max_songs)
 
-            if len(candidates) < 30:
+            # Progressive filter relaxation — drop the most data-dependent
+            # filters first (moods, bpm, keywords) to preserve genre/year/artist
+            # context for as long as possible.  Only broaden when we don't have
+            # enough candidates to fill the requested playlist.
+            min_needed = req.max_songs
+
+            # Step 1: drop moods + bpm + keywords (most likely to cause empty
+            # results, especially when mood scanning hasn't run or BPM tags are
+            # sparse)
+            if len(candidates) < min_needed and any(filters.get(k) for k in ("moods", "bpm_min", "bpm_max", "keywords")):
+                yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, relaxing mood/tempo filters..."})
+                relaxed = {k: v for k, v in filters.items() if k not in ("moods", "bpm_min", "bpm_max", "keywords")}
+                with db.get_db() as conn:
+                    candidates = db.filter_tracks(conn, relaxed, limit=config.max_candidates, max_songs=req.max_songs)
+
+            # Step 2: keep only genres + artists + negative filters (drop year range)
+            if len(candidates) < min_needed:
                 yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, broadening search..."})
-                broad_filters = {"genres": filters.get("genres", [])}
+                broad_keys = ("genres", "artists", "exclude_genres", "exclude_artists", "exclude_keywords")
+                broad_filters = {k: filters[k] for k in broad_keys if filters.get(k)}
                 with db.get_db() as conn:
                     candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates, max_songs=req.max_songs)
 
-            if len(candidates) < 20:
+            # Step 3: last resort — no filters at all
+            if len(candidates) < min_needed:
                 with db.get_db() as conn:
                     candidates = db.filter_tracks(conn, {}, limit=config.max_candidates, max_songs=req.max_songs)
 
@@ -605,6 +623,7 @@ async def generate_playlist(req: GenerateRequest):
                 max_songs=req.max_songs,
                 target_duration_min=req.target_duration_min,
                 provider=req.provider,
+                filters=filters,
             )
 
             yield sse("progress", {"phase": "matching", "message": "Building playlist..."})

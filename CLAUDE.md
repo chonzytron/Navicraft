@@ -42,7 +42,9 @@ unraid/
 - **Auto-migration** via `_migrate()` in `database.py` — new columns added automatically on startup
 - **Two-pass AI** to handle 20–50k song libraries without exceeding context limits:
   - Pass 1: prompt + compact library summary → structured filters (genres, years, artists, moods, excludes). System prompt includes the full standardized Essentia mood/theme vocabulary (57 tags) so the AI maps natural language to valid filter terms. Built dynamically via `_build_pass1_system()`.
-  - SQLite query narrows to ~500 candidates, biased by popularity with random jitter
+  - SQLite query narrows to up to 500 candidates, biased by popularity with random jitter. If fewer than 500 match but enough exist to fill the playlist, they pass directly to Pass 2 without broadening — keeps results focused for artist-specific or niche queries.
+  - Progressive filter relaxation when not enough candidates: drop moods/bpm/keywords first (most data-dependent), then year range, then genre+artists only, then unfiltered last resort. This preserves genre/year context as long as possible instead of cliff-dropping to genre-only.
+  - Keywords from Pass 1 matched against title, album, and comment fields (ORed together).
   - Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates; skipped when specific artists are requested
   - Pass 2: prompt + candidates in compact semicolon-delimited format with header row (`id;title;artist;genre;yr;dur;bpm;tags;pop`). Mood and theme tags are merged into a single `tags` field. Album field omitted to save tokens. Confidence scores stripped from tags for compact display.
 - **Negative filters**: Pass 1 returns `exclude_genres`, `exclude_artists`, `exclude_keywords` for "NOT" prompts

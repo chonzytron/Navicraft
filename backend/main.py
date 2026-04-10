@@ -623,6 +623,7 @@ async def generate_playlist(req: GenerateRequest):
                 max_songs=req.max_songs,
                 target_duration_min=req.target_duration_min,
                 provider=req.provider,
+                filters=filters,
             )
 
             yield sse("progress", {"phase": "matching", "message": "Building playlist..."})

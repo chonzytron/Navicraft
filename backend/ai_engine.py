@@ -68,7 +68,8 @@ Rules:
 - Return EXACTLY the requested count. Only fewer if not enough candidates.
 - If target duration given, it overrides count — pick songs until total is within ±5min of target using the dur column (m:ss).
 - Order for flow: energy arc, tempo, transitions. Mix artists.
-- GENRE FIDELITY IS CRITICAL: every song you pick MUST fit the genres/mood/context described in the prompt. A popular song that doesn't match the requested genre is a bad pick — skip it regardless of popularity. For example, if the prompt asks for "electronic and hip-hop for the gym", do not include rock, pop, indie, or other off-genre songs even if they are popular.
+- GENRE FIDELITY IS CRITICAL: every song you pick MUST fit the genres/mood/context described in the prompt. When "Search filters" are provided, cross-check each candidate's genre column against those target genres — a candidate whose genre doesn't overlap with the search filters is almost certainly a bad pick. A popular song that doesn't match the requested genre is a bad pick — skip it regardless of popularity. For example, if the prompt asks for "electronic and hip-hop for the gym", do not include rock, pop, indie, or other off-genre songs even if they are popular.
+- DISCOVERY: include a healthy mix of well-known and lesser-known artists. Don't just pick the most recognizable names — a great track from a niche artist that fits the vibe perfectly is a better pick than a famous song that only loosely matches. Aim for at least 30% lesser-known artists.
 - Use popularity as a tiebreaker between songs that equally fit the prompt, not as a primary selection criterion.
 - Match the vibe/energy/context of the prompt (e.g. "gym" = high energy, driving beats).
 """
@@ -234,6 +235,7 @@ async def pass2_select_songs(
     max_songs: int,
     provider: str | None = None,
     target_duration_min: int = None,
+    filters: dict | None = None,
 ) -> dict:
     """
     Pass 2: Select and order songs from the filtered candidates.
@@ -268,8 +270,25 @@ async def pass2_select_songs(
     if target_duration_min:
         duration_note = f"\nTarget duration: {target_duration_min}min (±5min). Use dur column to track total."
 
+    # Include Pass 1 filter context so the AI knows what genres/moods were
+    # targeted and can prioritise candidates that genuinely match.
+    filter_context = ""
+    if filters:
+        parts = []
+        if filters.get("genres"):
+            parts.append(f"Genres: {', '.join(filters['genres'])}")
+        if filters.get("artists"):
+            parts.append(f"Artists: {', '.join(filters['artists'])}")
+        if filters.get("moods"):
+            parts.append(f"Moods: {', '.join(filters['moods'])}")
+        if filters.get("bpm_min") or filters.get("bpm_max"):
+            bpm = f"{filters.get('bpm_min', '?')}-{filters.get('bpm_max', '?')}"
+            parts.append(f"BPM: {bpm}")
+        if parts:
+            filter_context = f"\nSearch filters: {'; '.join(parts)}"
+
     user_msg = f"""Prompt: "{prompt}"
-Select {max_songs} songs.{duration_note}
+Select {max_songs} songs.{duration_note}{filter_context}
 
 {chr(10).join(candidate_lines)}"""
 

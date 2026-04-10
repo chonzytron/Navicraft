@@ -289,9 +289,12 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
 
     if filters.get("artists"):
         artists = filters["artists"]
-        artist_clauses = " OR ".join("LOWER(artist) LIKE ?" for _ in artists)
+        artist_clauses = " OR ".join(
+            "(LOWER(artist) LIKE ? OR LOWER(album_artist) LIKE ?)" for _ in artists
+        )
         conditions.append(f"({artist_clauses})")
-        params.extend(f"%{a.lower()}%" for a in artists)
+        for a in artists:
+            params.extend([f"%{a.lower()}%", f"%{a.lower()}%"])
 
     if filters.get("moods"):
         moods = filters["moods"]

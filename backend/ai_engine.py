@@ -50,15 +50,14 @@ def _build_pass1_system() -> str:
 {{"genres":[],"year_min":null,"year_max":null,"artists":[],"moods":[],"bpm_min":null,"bpm_max":null,"keywords":[],"exclude_genres":[],"exclude_artists":[],"exclude_keywords":[]}}
 
 Rules:
-- genres: list the specific genres the user asked for, plus closely related sub-genres (e.g. "electronic" → also "electro", "techno", "house", "EDM", "trance", "drum and bass"). Do NOT add distant or unrelated genres just to widen the pool — if the user says "electronic and hip-hop", do not add "rock", "pop", "indie", etc.
+- genres: list the specific genres the user asked for, plus closely related sub-genres. STRONGLY PREFER genres from the "Genres:" list provided — those are the actual genres tagged in the library, so matching them gives the best results. You may add a few standard sub-genre names even if not in the list (e.g. "electronic" → also "electro", "techno", "house"), but every genre MUST be a strict sub-genre of what the user asked for. Do NOT add adjacent or tangentially related genres — "electronic" does NOT justify adding "pop", "dance pop", "synth-pop", or "new wave". When in doubt, leave it out.
 - artists: only if prompt names specific artists/styles. Empty for open prompts.
 - years: null if unconstrained. Refers to ORIGINAL release year, not reissues.
 - moods: ONLY from this vocabulary (unrecognized terms match nothing): {vocab}
 - bpm: set range if tempo matters (workout/gym=120-160, chill=60-100). null otherwise.
 - keywords: terms for song titles, comments, or album names.
 - exclude_*: for "NOT"/"no"/"without" exclusions.
-- Contextual cues matter: "gym"/"workout"/"running" imply high energy, fast tempo. Reflect this in moods and bpm.
-- Include enough sub-genres to get a good pool, but every genre must be genuinely related to the prompt."""
+- Contextual cues matter: "gym"/"workout"/"running" imply high energy, fast tempo. Reflect this in moods and bpm."""
 
 PASS2_SYSTEM = """Select and order songs from candidates for a playlist. Respond ONLY with JSON (no markdown):
 {"name":"Playlist Name","description":"Brief vibe description","song_ids":[123,456,789]}
@@ -121,6 +120,7 @@ async def _call_claude(system: str, user_message: str) -> str:
                 json={
                     "model": config.claude_model,
                     "max_tokens": 8192,
+                    "temperature": 0.7,
                     "system": system,
                     "messages": [{"role": "user", "content": user_message}],
                 },

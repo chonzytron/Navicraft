@@ -584,13 +584,18 @@ async def generate_playlist(req: GenerateRequest):
             with db.get_db() as conn:
                 candidates = db.filter_tracks(conn, filters, limit=config.max_candidates, max_songs=req.max_songs)
 
-            if len(candidates) < 30:
+            # Only broaden if we don't have enough candidates to fill the playlist.
+            # When filters return fewer than max_candidates but enough for the
+            # requested playlist size, pass them directly to Pass 2 — this keeps
+            # results focused (e.g. artist-specific or niche genre queries).
+            min_needed = req.max_songs
+            if len(candidates) < min_needed:
                 yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, broadening search..."})
                 broad_filters = {"genres": filters.get("genres", [])}
                 with db.get_db() as conn:
                     candidates = db.filter_tracks(conn, broad_filters, limit=config.max_candidates, max_songs=req.max_songs)
 
-            if len(candidates) < 20:
+            if len(candidates) < min_needed:
                 with db.get_db() as conn:
                     candidates = db.filter_tracks(conn, {}, limit=config.max_candidates, max_songs=req.max_songs)
 

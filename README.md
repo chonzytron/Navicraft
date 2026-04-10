@@ -22,9 +22,11 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
     Configurable: batch size, schedule window (e.g. overnight), or continuous mode. Enable in Settings.
 
 3. GENERATE (two-pass AI)
-   Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, exclusions)
-   SQLite query narrows to ~500 candidates, biased by popularity, with proportional per-artist diversity cap
-   Pass 2: prompt + candidate list → AI picks & orders the final playlist
+   Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, keywords, exclusions)
+   SQLite query narrows to up to 500 candidates, biased by popularity with random jitter
+   Progressive filter relaxation if not enough matches: drop moods/bpm/keywords → drop year range → genre+artists only → unfiltered
+   Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates
+   Pass 2: prompt + candidate list + search filter context → AI picks & orders the final playlist, cross-checking genre fidelity and mixing well-known with lesser-known artists
 
 4. CREATE PLAYLIST
    Match songs to Navidrome IDs → Subsonic createPlaylist
@@ -32,15 +34,16 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
    Or export as .m3u file for any music player
 ```
 
-**Why two passes?** A 30k song library won't fit in a single AI prompt. Pass 1 uses a compact library summary to identify *what* to look for. SQLite narrows to ~500 candidates. Pass 2 gets full metadata for those candidates and selects the final playlist with good flow and variety.
+**Why two passes?** A 30k song library won't fit in a single AI prompt. Pass 1 uses a compact library summary to identify *what* to look for. SQLite narrows to up to 500 candidates. Pass 2 gets full metadata for those candidates plus the original search filters, and selects the final playlist with genre fidelity, good flow, and a mix of popular and lesser-known artists.
 
 ## Features
 
 - **Natural language prompts** — "Upbeat indie rock for a summer road trip" or "Jazz but NOT smooth jazz"
-- **Popularity-aware** — Uses Deezer track rank, Last.fm listener counts, and MusicBrainz community ratings so playlists favour well-known tracks over deep cuts (Deezer and MusicBrainz require no API key)
+- **Popularity-aware with discovery** — Uses Deezer track rank, Last.fm listener counts, and MusicBrainz community ratings for popularity scoring (Deezer and MusicBrainz require no API key). Pass 2 is instructed to mix well-known and lesser-known artists rather than just picking the most popular names.
 - **Mood & theme tagging** — Essentia audio analysis classifies tracks into a standardized vocabulary of 31 mood tags (happy, calm, dark, energetic, ...) and 26 theme tags (film, party, summer, ...) with confidence scores. The AI receives the full vocabulary in Pass 1 to map natural language prompts to precise database filters.
 - **Negative filters** — "NOT", "no", "without" in prompts automatically exclude matching genres, artists, or keywords
 - **Artist diversity** — Candidates are capped at 30% of requested song count per artist (min 3) so one artist never dominates; cap is skipped when specific artists are requested
+- **Smart filter relaxation** — When strict filters (mood, BPM, keywords) return too few matches, filters are progressively relaxed rather than thrown away entirely, preserving genre and year context as long as possible
 - **Real-time progress** — SSE streaming shows each generation phase as it happens with elapsed time
 - **Multiple AI providers** — Claude (Anthropic) or Gemini (Google); switch per-request in the UI when both keys are configured
 - **Rich metadata** — Scans BPM, mood, composer, label directly from audio files (richer than the Subsonic API)
@@ -275,6 +278,7 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 - **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer. Enable mood/theme scanning in Settings to auto-tag tracks via audio analysis.
 - **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data.
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
+- **Keywords work too.** Prompts like "greatest hits" or "songs about love" extract keywords that match against song titles, albums, and comments.
 - **Claude vs Gemini:** Claude tends to produce more thoughtful, ordered playlists. Gemini is faster and has a generous free tier. Both can be active simultaneously and switched per-request in the UI.
 - **Large libraries (50k+):** The two-pass strategy handles this well. If the AI misses songs you'd expect, increase `MAX_CANDIDATES` (uses more tokens per request).
 - **Media server ID sync:** NaviCraft matches songs to Navidrome/Plex by file path. If paths differ (e.g. symlinks), it falls back to artist + title matching. When both servers are configured, IDs are synced independently for each.

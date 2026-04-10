@@ -311,6 +311,16 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         conditions.append("bpm <= ?")
         params.append(filters["bpm_max"])
 
+    if filters.get("keywords"):
+        keywords = filters["keywords"]
+        kw_clauses = " OR ".join(
+            "(LOWER(title) LIKE ? OR LOWER(album) LIKE ? OR LOWER(comment) LIKE ?)"
+            for _ in keywords
+        )
+        conditions.append(f"({kw_clauses})")
+        for kw in keywords:
+            params.extend([f"%{kw.lower()}%", f"%{kw.lower()}%", f"%{kw.lower()}%"])
+
     # Negative filters — exclude genres, artists, keywords
     if filters.get("exclude_genres"):
         for eg in filters["exclude_genres"]:
@@ -339,7 +349,7 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
                popularity, mood_tags, theme_tags
         FROM tracks
         WHERE {where}
-        ORDER BY (COALESCE(popularity, 50) * 0.6 + ABS(RANDOM()) % 50) DESC
+        ORDER BY (COALESCE(popularity, 30) * 0.7 + ABS(RANDOM()) % 30) DESC
         LIMIT ?
     """, params).fetchall()
 

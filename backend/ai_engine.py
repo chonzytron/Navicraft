@@ -240,19 +240,28 @@ async def pass2_select_songs(
     """
     Pass 2: Select and order songs from the filtered candidates.
     """
-    # Build compact candidate list — header row + data rows
-    # Fields: id, title, artist, genre, year, duration, bpm, tags (mood+theme merged), popularity
-    header = "id;title;artist;genre;yr;dur;bpm;tags;pop"
-    candidate_lines = [header]
+    # Build compact candidate list — header row + data rows.
+    # Optional columns (bpm, tags, pop) are omitted entirely when < 10%
+    # of candidates have data, saving tokens without losing signal.
+    threshold = max(1, len(candidates) // 10)
+    include_bpm = sum(1 for c in candidates if c.get("bpm")) >= threshold
+    include_tags = sum(1 for c in candidates if c.get("mood_tags") or c.get("theme_tags")) >= threshold
+    include_pop = sum(1 for c in candidates if c.get("popularity") is not None) >= threshold
+
+    header_parts = ["id", "title", "artist", "genre", "yr", "dur"]
+    if include_bpm:
+        header_parts.append("bpm")
+    if include_tags:
+        header_parts.append("tags")
+    if include_pop:
+        header_parts.append("pop")
+
+    candidate_lines = [";".join(header_parts)]
     for c in candidates:
         dur = ""
         if c.get("duration") is not None:
             m, s = divmod(int(c["duration"]), 60)
             dur = f"{m}:{s:02d}"
-        # Merge mood + theme tags into single field, strip confidence scores
-        mood = _strip_scores(c.get("mood_tags") or "")
-        theme = _strip_scores(c.get("theme_tags") or "")
-        tags = ",".join(filter(None, [mood, theme]))
         parts = [
             str(c["id"]),
             c["title"],
@@ -260,10 +269,16 @@ async def pass2_select_songs(
             c.get("genre") or "",
             str(c["year"]) if c.get("year") else "",
             dur,
-            str(c["bpm"]) if c.get("bpm") else "",
-            tags,
-            str(c["popularity"]) if c.get("popularity") is not None else "",
         ]
+        if include_bpm:
+            parts.append(str(c["bpm"]) if c.get("bpm") else "")
+        if include_tags:
+            # Merge mood + theme tags into single field, strip confidence scores
+            mood = _strip_scores(c.get("mood_tags") or "")
+            theme = _strip_scores(c.get("theme_tags") or "")
+            parts.append(",".join(filter(None, [mood, theme])))
+        if include_pop:
+            parts.append(str(c["popularity"]) if c.get("popularity") is not None else "")
         candidate_lines.append(";".join(parts))
 
     duration_note = ""
@@ -292,7 +307,8 @@ Select {max_songs} songs.{duration_note}{filter_context}
 
 {chr(10).join(candidate_lines)}"""
 
-    logger.info("Pass 2: selecting from %d candidates (max %d songs)", len(candidates), max_songs)
+    cols_included = len(header_parts)
+    logger.info("Pass 2: selecting from %d candidates (max %d songs, %d columns)", len(candidates), max_songs, cols_included)
     text = await _call_ai(PASS2_SYSTEM, user_msg, provider)
     try:
         result = _parse_json(text)

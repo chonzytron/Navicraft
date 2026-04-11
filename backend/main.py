@@ -12,7 +12,7 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -865,6 +865,35 @@ async def delete_playlist(playlist_id: str, server: Optional[str] = None):
 app.mount("/assets", StaticFiles(directory="/app/frontend/assets", check_dir=False), name="assets")
 
 
+_FRONTEND_DIR = "/app/frontend"
+
+
+def _asset_version(relative: str) -> str:
+    """Return a cache-busting version token based on the asset's mtime."""
+    try:
+        return str(int(os.path.getmtime(os.path.join(_FRONTEND_DIR, relative))))
+    except OSError:
+        return "0"
+
+
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
-    return FileResponse("/app/frontend/index.html")
+    """Serve index.html with cache-busting query strings on assets so
+    browsers can't serve a stale app.js against a newer index.html."""
+    index_path = os.path.join(_FRONTEND_DIR, "index.html")
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            html = f.read()
+    except FileNotFoundError:
+        return FileResponse(index_path)
+    html = html.replace(
+        "/assets/app.js",
+        f"/assets/app.js?v={_asset_version('assets/app.js')}",
+    )
+    html = html.replace(
+        "/assets/styles.css",
+        f"/assets/styles.css?v={_asset_version('assets/styles.css')}",
+    )
+    # Tell the browser to always revalidate the HTML itself — otherwise a
+    # stale index.html could reference a cached old app.js.
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-cache"})

@@ -206,16 +206,101 @@ function _clearScanLog(){
 }
 
 // --- Generate (SSE streaming) ---
-function phaseLabel(phase){
-  const labels={
-    pass1:'Pass 1: Analyzing your prompt...',
-    filtering:'Searching your library...',
-    broadening:'Broadening search...',
-    pass2:'Pass 2: AI is selecting songs...',
-    matching:'Building playlist...',
-    saving:'Saving to server...',
-  };
-  return labels[phase]||null;
+let processLogEntries=[];
+let processLogLive=false;
+
+function _clearProcessLog(){
+  processLogEntries=[];
+  const el=$('#processLog');
+  el.onclick=null;
+  el.innerHTML='';
+  el.classList.remove('on','clickable');
+  processLogLive=false;
+}
+
+function _addProcessLog(text,sub){
+  processLogEntries.push({text,sub:sub||null});
+  _renderProcessLog();
+}
+
+function _renderProcessLog(){
+  const el=$('#processLog');
+  el.innerHTML=processLogEntries.map(({text,sub})=>{
+    if(sub){
+      return `<div class="scan-log-line">${esc(text)}<br><span class="scan-log-sub">${esc(sub)}</span></div>`;
+    }
+    return `<div class="scan-log-line">${esc(text)}</div>`;
+  }).join('');
+  el.classList.add('on');
+}
+
+function _fmtRange(lo,hi){
+  if(lo==null&&hi==null)return'';
+  return `${lo!=null?lo:'?'}–${hi!=null?hi:'?'}`;
+}
+
+function _joinList(arr,max=6){
+  if(!arr||!arr.length)return'';
+  if(arr.length<=max)return arr.join(', ');
+  return `${arr.slice(0,max).join(', ')} +${arr.length-max} more`;
+}
+
+function renderProgressEvent(data){
+  const phase=data.phase;
+  const msg=data.message;
+  switch(phase){
+    case'pass1':
+      _addProcessLog('Pass 1 — analyzing your prompt');
+      break;
+    case'pass1_done':{
+      const f=data.filters||{};
+      const parts=[];
+      if(f.genres&&f.genres.length)parts.push(`Genres: ${_joinList(f.genres,8)}`);
+      if(f.artists&&f.artists.length)parts.push(`Artists: ${_joinList(f.artists,6)}`);
+      if(f.moods&&f.moods.length)parts.push(`Moods: ${_joinList(f.moods,6)}`);
+      const yr=_fmtRange(f.year_min,f.year_max);
+      if(yr)parts.push(`Years: ${yr}`);
+      const bpm=_fmtRange(f.bpm_min,f.bpm_max);
+      if(bpm)parts.push(`BPM: ${bpm}`);
+      if(f.keywords&&f.keywords.length)parts.push(`Keywords: ${_joinList(f.keywords,5)}`);
+      if(f.exclude_genres&&f.exclude_genres.length)parts.push(`Not: ${_joinList(f.exclude_genres,4)}`);
+      if(f.exclude_artists&&f.exclude_artists.length)parts.push(`Not artists: ${_joinList(f.exclude_artists,4)}`);
+      _addProcessLog('Pass 1 complete — intent extracted',parts.length?parts.join(' · '):'No specific filters — using open search');
+      break;
+    }
+    case'filtering':
+      _addProcessLog('Filtering library with extracted criteria');
+      break;
+    case'filtering_done':{
+      const n=data.candidates_found||0;
+      const ua=data.unique_artists||0;
+      const head=`Filtered to ${n.toLocaleString()} candidates across ${ua.toLocaleString()} artists`;
+      const sample=data.sample_artists||[];
+      const sub=sample.length?`Considering: ${_joinList(sample,12)}`:null;
+      _addProcessLog(head,sub);
+      break;
+    }
+    case'broadening':
+      _addProcessLog(msg||'Broadening search — too few matches');
+      break;
+    case'pass2':
+      _addProcessLog(msg||'Pass 2 — AI is selecting songs from the candidate pool');
+      break;
+    case'pass2_done':{
+      const n=data.selected_count||0;
+      const name=data.playlist_name||'';
+      _addProcessLog(`Pass 2 complete — AI picked ${n} songs`,name?`"${name}"`:null);
+      break;
+    }
+    case'matching':
+      _addProcessLog('Matching selections back to library tracks');
+      break;
+    case'saving':
+      _addProcessLog(msg||'Saving playlist to server');
+      break;
+    default:
+      if(msg)_addProcessLog(msg);
+  }
 }
 
 async function generate(){
@@ -227,23 +312,16 @@ async function generate(){
   const autoCreate=!$('#previewToggle').classList.contains('on');
 
   _clearScanLog();
+  _clearProcessLog();
+  processLogLive=true;
   $('#genBtn').disabled=true;
   $('#results').classList.remove('on');
-  $('#loading').classList.add('on');
-  $('#loadMsg').textContent='Starting...';
-  $('#loadSub').textContent='';
+  _addProcessLog('Starting generation…');
 
   const body={prompt,max_songs:maxSongs,auto_create:autoCreate};
   if(targetMin)body.target_duration_min=targetMin;
   if(activeProvider)body.provider=activeProvider;
   if(activeServer)body.server=activeServer;
-
-  let startTime=Date.now();
-  let elapsed;
-  const elapsedTimer=setInterval(()=>{
-    elapsed=Math.floor((Date.now()-startTime)/1000);
-    $('#loadSub').textContent=`${elapsed}s elapsed`;
-  },1000);
 
   try{
     const resp=await fetch('/api/generate',{
@@ -277,8 +355,7 @@ async function generate(){
         }else if(line.startsWith('data: ')&&eventType){
           const data=JSON.parse(line.slice(6));
           if(eventType==='progress'){
-            const label=phaseLabel(data.phase)||data.message||'Working...';
-            $('#loadMsg').textContent=label;
+            renderProgressEvent(data);
           }else if(eventType==='result'){
             currentResult=data;
             gotResult=true;
@@ -296,11 +373,16 @@ async function generate(){
       throw new Error('No result received from server');
     }
   }catch(e){
+    _addProcessLog(`Error: ${e.message}`);
     toast(e.message,'error');
   }finally{
-    clearInterval(elapsedTimer);
     $('#genBtn').disabled=false;
-    $('#loading').classList.remove('on');
+    processLogLive=false;
+    // Allow the user to click to dismiss once generation has finished
+    const el=$('#processLog');
+    if(el.classList.contains('on')){
+      setTimeout(()=>{ el.onclick=_clearProcessLog; el.classList.add('clickable'); },500);
+    }
   }
 }
 
@@ -368,29 +450,9 @@ async function saveToServer(server){
   }catch(e){toast(`Save failed: ${e.message}`,'error')}
 }
 
-// --- Export .m3u ---
-async function exportM3U(){
-  if(!currentResult||!currentResult.songs.length){toast('No songs to export','error');return}
-  try{
-    const resp=await fetch('/api/export/m3u',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:currentResult.name,songs:currentResult.songs}),
-    });
-    if(!resp.ok)throw new Error('Export failed');
-    const blob=await resp.blob();
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;
-    a.download=`${currentResult.name.replace(/[^a-zA-Z0-9 _-]/g,'')}.m3u`;
-    document.body.appendChild(a);a.click();document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast('M3U file downloaded','success');
-  }catch(e){toast(`Export failed: ${e.message}`,'error')}
-}
-
 function reset(){
   $('#results').classList.remove('on');
+  _clearProcessLog();
   currentResult=null;
   $('#prompt').value='';
   $('#prompt').focus();

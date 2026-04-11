@@ -12,7 +12,7 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -578,6 +578,27 @@ async def generate_playlist(req: GenerateRequest):
                 }
 
             filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary, req.provider)
+
+            # Emit the extracted intent so the user can see what the AI
+            # distilled from their prompt before we query the library.
+            yield sse("progress", {
+                "phase": "pass1_done",
+                "message": "Intent extracted",
+                "filters": {
+                    "genres": filters.get("genres") or [],
+                    "artists": filters.get("artists") or [],
+                    "moods": filters.get("moods") or [],
+                    "year_min": filters.get("year_min"),
+                    "year_max": filters.get("year_max"),
+                    "bpm_min": filters.get("bpm_min"),
+                    "bpm_max": filters.get("bpm_max"),
+                    "keywords": filters.get("keywords") or [],
+                    "exclude_genres": filters.get("exclude_genres") or [],
+                    "exclude_artists": filters.get("exclude_artists") or [],
+                    "exclude_keywords": filters.get("exclude_keywords") or [],
+                },
+            })
+
             yield sse("progress", {"phase": "filtering", "message": "Searching library..."})
 
             # --- Filter candidates ---
@@ -619,6 +640,35 @@ async def generate_playlist(req: GenerateRequest):
 
             logger.info("Sending %d candidates to Pass 2", len(candidates))
 
+            # Emit a preview of the filtered candidate pool so the user can see
+            # which artists are being considered heading into Pass 2.
+            seen_artists = set()
+            sample_artists = []
+            for c in candidates:
+                a = (c.get("artist") or "").strip()
+                if not a or a.lower() in seen_artists:
+                    continue
+                seen_artists.add(a.lower())
+                sample_artists.append(a)
+                if len(sample_artists) >= 15:
+                    break
+            unique_artist_total = len({
+                (c.get("artist") or "").strip().lower()
+                for c in candidates if c.get("artist")
+            })
+            sample_tracks = [
+                {"title": c.get("title") or "", "artist": c.get("artist") or ""}
+                for c in candidates[:6]
+            ]
+            yield sse("progress", {
+                "phase": "filtering_done",
+                "message": f"Found {len(candidates)} candidates",
+                "candidates_found": len(candidates),
+                "unique_artists": unique_artist_total,
+                "sample_artists": sample_artists,
+                "sample_tracks": sample_tracks,
+            })
+
             # --- Pass 2 ---
             yield sse("progress", {"phase": "pass2", "message": f"Selecting from {len(candidates)} candidates..."})
 
@@ -630,6 +680,16 @@ async def generate_playlist(req: GenerateRequest):
                 provider=req.provider,
                 filters=filters,
             )
+
+            selected_ids = ai_result.get("song_ids") or [
+                s.get("id") for s in ai_result.get("songs", [])
+            ]
+            yield sse("progress", {
+                "phase": "pass2_done",
+                "message": f"AI selected {len(selected_ids)} songs",
+                "selected_count": len(selected_ids),
+                "playlist_name": ai_result.get("name") or "",
+            })
 
             yield sse("progress", {"phase": "matching", "message": "Building playlist..."})
 
@@ -796,37 +856,6 @@ async def delete_playlist(playlist_id: str, server: Optional[str] = None):
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
-
-
-# =========================================================================
-# M3U Export
-# =========================================================================
-
-class ExportM3URequest(BaseModel):
-    name: str = Field(..., min_length=1)
-    songs: list[dict] = Field(..., min_length=1)
-
-
-@app.post("/api/export/m3u")
-async def export_m3u(req: ExportM3URequest):
-    """Generate a .m3u8 playlist file for download."""
-    lines = ["#EXTM3U", f"#PLAYLIST:{req.name}"]
-    for s in req.songs:
-        duration = int(s.get("duration") or 0)
-        artist = s.get("artist", "Unknown")
-        title = s.get("title", "Unknown")
-        file_path = s.get("file_path", "")
-        lines.append(f"#EXTINF:{duration},{artist} - {title}")
-        lines.append(file_path)
-
-    content = "\n".join(lines) + "\n"
-    safe_name = "".join(c for c in req.name if c.isalnum() or c in " -_").strip() or "playlist"
-
-    return Response(
-        content=content,
-        media_type="audio/x-mpegurl",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.m3u"'},
-    )
 
 
 # =========================================================================

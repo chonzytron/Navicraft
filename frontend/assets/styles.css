@@ -65,13 +65,9 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .btn-gen:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 24px var(--accent-glow)}
 .btn-gen:disabled{opacity:.4;cursor:not-allowed}
 
-/* --- Loading --- */
-.loading{display:none;text-align:center;padding:60px 20px}
-.loading.on{display:block}
+/* --- Spinner (used by scan bar) --- */
 .spinner{width:40px;height:40px;border:2.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 18px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.load-msg{color:var(--text-3);font-size:14px}
-.load-sub{color:var(--text-4);font-size:12px;font-family:var(--mono);margin-top:8px}
 
 /* --- Results --- */
 .results{display:none}
@@ -182,9 +178,11 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .cfg-field select{cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23606078' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;padding-right:28px}
 .cfg-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 22px;border-top:1px solid var(--border)}
 
-/* --- Scan log --- */
+/* --- Scan log / process log --- */
 .scan-log{display:none;padding:10px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:24px;flex-direction:column;gap:3px;cursor:pointer}
 .scan-log.on{display:flex}
+#processLog{cursor:default}
+#processLog.clickable{cursor:pointer}
 .scan-log-line{font-size:12px;font-family:var(--mono);color:var(--text-3);padding:1px 0}
 .scan-log-sub{font-size:11px;color:var(--text-4)}
 

@@ -127,12 +127,8 @@
   <!-- Scan Log -->
   <div class="scan-log" id="scanLog" title="Tap to dismiss"></div>
 
-  <!-- Loading -->
-  <div class="loading" id="loading">
-    <div class="spinner"></div>
-    <div class="load-msg" id="loadMsg">Analyzing your library...</div>
-    <div class="load-sub" id="loadSub">Pass 1: Extracting intent from your prompt</div>
-  </div>
+  <!-- Generation Process Log -->
+  <div class="scan-log" id="processLog"></div>
 
   <!-- Results -->
   <div class="results" id="results">
@@ -150,7 +146,6 @@
       <div class="export-group" id="exportGroup">
         <button class="btn btn-primary" id="saveNavidromeBtn" onclick="saveToServer('navidrome')" style="display:none">Save to Navidrome</button>
         <button class="btn btn-primary" id="savePlexBtn" onclick="saveToServer('plex')" style="display:none">Save to Plex</button>
-        <button class="btn btn-ghost" onclick="exportM3U()">Export .m3u</button>
       </div>
       <div class="saved-pills" id="savedPills" style="display:none"></div>
       <button class="btn btn-ghost" onclick="reset()">New playlist</button>

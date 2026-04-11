@@ -256,7 +256,6 @@ navicraft/
 | GET | `/api/mood/status` | Mood scan progress and coverage stats |
 | POST | `/api/mood/reset` | Reset all mood/theme tags for re-scanning |
 | POST | `/api/mood/continuous` | Start/stop continuous mood scanning (play/pause) |
-| POST | `/api/export/m3u` | Download playlist as .m3u file |
 
 ### Generate request
 

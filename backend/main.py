@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -39,6 +40,26 @@ _scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": "", "log
 # Rate limiting for /api/generate
 _last_generate_time = 0.0
 _GENERATE_COOLDOWN = 10  # seconds
+
+# Patterns that indicate a popularity-driven ("best of" / "top hits") request.
+# Used as a deterministic fallback when the AI doesn't set popularity_mode.
+_POPULARITY_PATTERNS = re.compile(
+    r"\b(?:"
+    r"best\s+of"
+    r"|top\s+hits"
+    r"|greatest\s+hits"
+    r"|biggest\s+hits"
+    r"|most\s+popular"
+    r"|top\s+\d+\s+(?:songs?|tracks?|hits?)"
+    r"|best\s+(?:songs?|tracks?)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_popularity_mode(prompt: str) -> bool:
+    """Detect popularity-driven intent from the prompt using pattern matching."""
+    return bool(_POPULARITY_PATTERNS.search(prompt))
 
 
 def _default_server() -> Optional[str]:
@@ -579,8 +600,10 @@ async def generate_playlist(req: GenerateRequest):
 
             filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary, req.provider)
 
-            # Detect popularity mode — "best of" / "top hits" requests
-            popularity_mode = bool(filters.get("popularity_mode"))
+            # Detect popularity mode — "best of" / "top hits" requests.
+            # Trust the AI flag first; fall back to regex pattern matching
+            # so the feature activates reliably even if the AI misses it.
+            popularity_mode = bool(filters.get("popularity_mode")) or _detect_popularity_mode(req.prompt)
 
             # In popularity mode, strip mood/bpm filters so we rely only on
             # the core anchor (artist or decade) + popularity ranking.

@@ -73,10 +73,14 @@ Rules:
 - If target duration given, it overrides count — pick songs until total is within ±5min of target using the dur column (m:ss).
 - Order for flow: energy arc, tempo, transitions. Mix artists.
 - GENRE FIDELITY IS CRITICAL: every song you pick MUST fit the genres/mood/context described in the prompt. When "Search filters" are provided, cross-check each candidate's genre column against those target genres — a candidate whose genre doesn't overlap with the search filters is almost certainly a bad pick. A popular song that doesn't match the requested genre is a bad pick — skip it regardless of popularity. For example, if the prompt asks for "electronic and hip-hop for the gym", do not include rock, pop, indie, or other off-genre songs even if they are popular.
-- DISCOVERY: include a healthy mix of well-known and lesser-known artists. Don't just pick the most recognizable names — a great track from a niche artist that fits the vibe perfectly is a better pick than a famous song that only loosely matches. Aim for at least 30% lesser-known artists.
-- Use popularity as a tiebreaker between songs that equally fit the prompt, not as a primary selection criterion.
+- SELECTION WEIGHTING: determine from the prompt which dimensions matter most and weight your selection accordingly:
+  - Popularity (the pop column) is always an important factor — prefer popular songs over obscure ones when both fit the prompt. It is NOT just a tiebreaker.
+  - Genre and artist constraints are hard filters — never violate them.
+  - Mood, when present in the search filters, is an additional narrowing filter — strongly prefer songs whose tags match the requested mood, but do not ignore popularity in favour of a slightly better mood match.
+  - The prompt itself tells you what to prioritise. "Top hits by X" = popularity-heavy. "Chill jazz for studying" = mood/vibe-heavy. "90s hip hop" = genre+era. Use your judgement.
+- DISCOVERY: for genre-based or broad requests (multiple artists in the candidate pool), include a healthy mix of well-known and lesser-known artists (~30% lesser-known) to keep playlists interesting. A great track from a niche artist that fits the vibe perfectly is a good pick. For single-artist requests, this does not apply — just pick that artist's best songs.
+- POPULARITY MODE: when search filters include "popularity_mode: true", popularity is the PRIMARY selection criterion. Pick the most popular songs first. For genre or decade requests, still maintain some artist diversity. For single-artist requests, simply rank by popularity. Mood matching does not apply in this mode.
 - Match the vibe/energy/context of the prompt (e.g. "gym" = high energy, driving beats).
-- POPULARITY MODE: when search filters include "popularity_mode: true", this is a "best of" / "top hits" request. In this mode, popularity is the PRIMARY selection criterion — pick the most popular songs first. Ignore mood/vibe matching. Still order for decent flow, but prioritise popularity over discovery.
 """
 
 

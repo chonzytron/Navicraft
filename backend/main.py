@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -39,6 +40,26 @@ _scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": "", "log
 # Rate limiting for /api/generate
 _last_generate_time = 0.0
 _GENERATE_COOLDOWN = 10  # seconds
+
+# Patterns that indicate a popularity-driven ("best of" / "top hits") request.
+# Used as a deterministic fallback when the AI doesn't set popularity_mode.
+_POPULARITY_PATTERNS = re.compile(
+    r"\b(?:"
+    r"best\s+of"
+    r"|top\s+hits"
+    r"|greatest\s+hits"
+    r"|biggest\s+hits"
+    r"|most\s+popular"
+    r"|top\s+\d+\s+(?:songs?|tracks?|hits?)"
+    r"|best\s+(?:songs?|tracks?)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_popularity_mode(prompt: str) -> bool:
+    """Detect popularity-driven intent from the prompt using pattern matching."""
+    return bool(_POPULARITY_PATTERNS.search(prompt))
 
 
 def _default_server() -> Optional[str]:
@@ -579,6 +600,19 @@ async def generate_playlist(req: GenerateRequest):
 
             filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary, req.provider)
 
+            # Detect popularity mode — "best of" / "top hits" requests.
+            # Trust the AI flag first; fall back to regex pattern matching
+            # so the feature activates reliably even if the AI misses it.
+            popularity_mode = bool(filters.get("popularity_mode")) or _detect_popularity_mode(req.prompt)
+
+            # In popularity mode, strip mood/bpm filters so we rely only on
+            # the core anchor (artist or decade) + popularity ranking.
+            if popularity_mode:
+                filters.pop("moods", None)
+                filters.pop("bpm_min", None)
+                filters.pop("bpm_max", None)
+                logger.info("Popularity mode active — mood/bpm filters stripped")
+
             # Emit the extracted intent so the user can see what the AI
             # distilled from their prompt before we query the library.
             yield sse("progress", {
@@ -596,6 +630,7 @@ async def generate_playlist(req: GenerateRequest):
                     "exclude_genres": filters.get("exclude_genres") or [],
                     "exclude_artists": filters.get("exclude_artists") or [],
                     "exclude_keywords": filters.get("exclude_keywords") or [],
+                    "popularity_mode": popularity_mode,
                 },
             })
 
@@ -608,7 +643,7 @@ async def generate_playlist(req: GenerateRequest):
             effective_limit = min(config.max_candidates, max(req.max_songs * 5, 150))
 
             with db.get_db() as conn:
-                candidates = db.filter_tracks(conn, filters, limit=effective_limit, max_songs=req.max_songs)
+                candidates = db.filter_tracks(conn, filters, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
 
             # Progressive filter relaxation — drop the most data-dependent
             # filters first (moods, bpm, keywords) to preserve genre/year/artist
@@ -623,7 +658,7 @@ async def generate_playlist(req: GenerateRequest):
                 yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, relaxing mood/tempo filters..."})
                 relaxed = {k: v for k, v in filters.items() if k not in ("moods", "bpm_min", "bpm_max", "keywords")}
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, relaxed, limit=effective_limit, max_songs=req.max_songs)
+                    candidates = db.filter_tracks(conn, relaxed, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
 
             # Step 2: keep only genres + artists + negative filters (drop year range)
             if len(candidates) < min_needed:
@@ -631,12 +666,12 @@ async def generate_playlist(req: GenerateRequest):
                 broad_keys = ("genres", "artists", "exclude_genres", "exclude_artists", "exclude_keywords")
                 broad_filters = {k: filters[k] for k in broad_keys if filters.get(k)}
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, broad_filters, limit=effective_limit, max_songs=req.max_songs)
+                    candidates = db.filter_tracks(conn, broad_filters, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
 
             # Step 3: last resort — no filters at all
             if len(candidates) < min_needed:
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, {}, limit=effective_limit, max_songs=req.max_songs)
+                    candidates = db.filter_tracks(conn, {}, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
 
             logger.info("Sending %d candidates to Pass 2", len(candidates))
 

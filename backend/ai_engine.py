@@ -47,17 +47,22 @@ def _build_pass1_system() -> str:
     vocab = ", ".join(sorted(MOOD_CATEGORY | THEME_CATEGORY))
 
     return f"""Extract search filters from a playlist prompt. Respond ONLY with JSON (no markdown):
-{{"genres":[],"year_min":null,"year_max":null,"artists":[],"moods":[],"bpm_min":null,"bpm_max":null,"keywords":[],"exclude_genres":[],"exclude_artists":[],"exclude_keywords":[]}}
+{{"genres":[],"year_min":null,"year_max":null,"artists":[],"moods":[],"bpm_min":null,"bpm_max":null,"keywords":[],"exclude_genres":[],"exclude_artists":[],"exclude_keywords":[],"popularity_mode":false}}
 
 Rules:
 - genres: list the specific genres the user asked for, plus closely related sub-genres. STRONGLY PREFER genres from the "Genres:" list provided — those are the actual genres tagged in the library, so matching them gives the best results. You may add a few standard sub-genre names even if not in the list (e.g. "electronic" → also "electro", "techno", "house"), but every genre MUST be a strict sub-genre of what the user asked for. Do NOT add adjacent or tangentially related genres — "electronic" does NOT justify adding "pop", "dance pop", "synth-pop", or "new wave". When in doubt, leave it out.
 - artists: only if prompt names specific artists/styles. Empty for open prompts.
 - years: null if unconstrained. Refers to ORIGINAL release year, not reissues.
 - moods: ONLY from this vocabulary (unrecognized terms match nothing): {vocab}
+  IMPORTANT: only set moods when the prompt clearly expresses a mood or emotional context. If the prompt does NOT convey any mood or vibe information, return moods as an empty list. Do NOT infer or guess moods that aren't supported by the prompt.
 - bpm: set range if tempo matters (workout/gym=120-160, chill=60-100). null otherwise.
 - keywords: terms for song titles, comments, or album names.
 - exclude_*: for "NOT"/"no"/"without" exclusions.
-- Contextual cues matter: "gym"/"workout"/"running" imply high energy, fast tempo. Reflect this in moods and bpm."""
+- Contextual cues matter: "gym"/"workout"/"running" imply high energy, fast tempo. Reflect this in moods and bpm.
+- popularity_mode: set to true when the user asks for "best of", "top hits", "greatest hits", "most popular", or similar popularity-driven requests. When popularity_mode is true:
+  - For artist-specific requests (e.g. "best of Daft Punk", "top hits by Queen"): set artists to only that artist, set moods to [], set genres to [], and set bpm to null. The intent is to filter ONLY by artist and rank by popularity.
+  - For decade/era requests (e.g. "top hits from the 90s", "best of the 80s"): set the appropriate year_min/year_max (e.g. 1990-1999 for "the 90s"), set moods to [], set genres to [], and set bpm to null. The intent is to filter ONLY by decade and rank by popularity.
+  - For other popularity requests: set the relevant filters but always set moods to [] and bpm to null."""
 
 PASS2_SYSTEM = """Select and order songs from candidates for a playlist. Respond ONLY with JSON (no markdown):
 {"name":"Playlist Name","description":"Brief vibe description","song_ids":[123,456,789]}
@@ -71,6 +76,7 @@ Rules:
 - DISCOVERY: include a healthy mix of well-known and lesser-known artists. Don't just pick the most recognizable names — a great track from a niche artist that fits the vibe perfectly is a better pick than a famous song that only loosely matches. Aim for at least 30% lesser-known artists.
 - Use popularity as a tiebreaker between songs that equally fit the prompt, not as a primary selection criterion.
 - Match the vibe/energy/context of the prompt (e.g. "gym" = high energy, driving beats).
+- POPULARITY MODE: when search filters include "popularity_mode: true", this is a "best of" / "top hits" request. In this mode, popularity is the PRIMARY selection criterion — pick the most popular songs first. Ignore mood/vibe matching. Still order for decent flow, but prioritise popularity over discovery.
 """
 
 
@@ -290,6 +296,8 @@ async def pass2_select_songs(
     filter_context = ""
     if filters:
         parts = []
+        if filters.get("popularity_mode"):
+            parts.append("popularity_mode: true")
         if filters.get("genres"):
             parts.append(f"Genres: {', '.join(filters['genres'])}")
         if filters.get("artists"):

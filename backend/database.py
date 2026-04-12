@@ -262,13 +262,15 @@ def get_year_range(db: sqlite3.Connection) -> dict:
 
 
 def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
-                   max_songs: int | None = None) -> list[dict]:
+                   max_songs: int | None = None, popularity_order: bool = False) -> list[dict]:
     """
     Query tracks matching AI-generated filters.
     filters can include: genres, year_min, year_max, artists, moods, bpm_min, bpm_max,
                          exclude_genres, exclude_artists, exclude_keywords
     Per-artist diversity cap is applied as 30% of max_songs (min 3) when no
     specific artists are requested. Skipped entirely when artists are specified.
+    When popularity_order is True, results are sorted strictly by popularity
+    descending (used for "best of" / "top hits" requests).
     """
     conditions = ["title IS NOT NULL"]
     params = []
@@ -346,13 +348,18 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
     fetch_limit = limit * 3
     params.append(fetch_limit)
 
+    if popularity_order:
+        order_clause = "COALESCE(popularity, 0) DESC"
+    else:
+        order_clause = "(COALESCE(popularity, 30) * 0.7 + ABS(RANDOM()) % 30) DESC"
+
     rows = db.execute(f"""
         SELECT id, title, artist, album_artist, album, genre, year,
                duration, bpm, composer, mood, navidrome_id, plex_id, file_path,
                popularity, mood_tags, theme_tags
         FROM tracks
         WHERE {where}
-        ORDER BY (COALESCE(popularity, 30) * 0.7 + ABS(RANDOM()) % 30) DESC
+        ORDER BY {order_clause}
         LIMIT ?
     """, params).fetchall()
 

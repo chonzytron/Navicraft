@@ -82,6 +82,45 @@ These are set from the Settings panel in the web UI. They can also be pre-set as
 | Mood Scan Batch Size | `50` | Tracks to process per mood scan run |
 | Mood Scan From Hour | `0` (midnight) | Schedule window start hour (0–23) |
 | Mood Scan To Hour | `6` (6 AM) | Schedule window end hour (0–23) |
+| Playlist Watcher Enabled | `false` | Enable Navidrome `[navicraft]` playlist detection |
+| Playlist Watcher Interval | `30` seconds | How often to poll for `[navicraft]` playlists (10–300s) |
+
+## Navidrome Playlist Watcher
+
+Generate playlists from inside Navidrome without opening the NaviCraft web UI.
+
+### Setup
+
+1. Open NaviCraft at `http://[YOUR_UNRAID_IP]:8085`
+2. Go to **Settings** (gear icon)
+3. Make sure your Navidrome connection is configured and showing a green dot
+4. Set **Playlist Watcher Enabled** to `true`
+5. (Optional) Adjust the **Watcher Interval** — default 30 seconds
+
+### Usage
+
+In Navidrome's web UI (or any Subsonic client like Feishin, Symfonium, etc.):
+
+1. Create a new, empty playlist
+2. Name it with your prompt and `[navicraft]`:
+   ```
+   chill jazz for studying [navicraft]
+   upbeat workout mix [navicraft, songs: 40]
+   dinner party music [navicraft, duration: 120]
+   best of the 90s [navicraft, songs: 30, duration: 60]
+   ```
+3. Within ~30 seconds, NaviCraft detects the playlist, generates songs, and populates it
+
+The `[navicraft]` tag is removed after generation, and the playlist is renamed to an AI-chosen name.
+
+### Parameters
+
+| Parameter | Range | Default | Example |
+|-----------|-------|---------|---------|
+| `songs` | 5–100 | 25 | `[navicraft, songs: 40]` |
+| `duration` | 5–600 min | — | `[navicraft, duration: 90]` |
+
+Both can be combined: `[navicraft, songs: 30, duration: 60]`
 
 ## Networking
 

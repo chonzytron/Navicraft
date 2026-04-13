@@ -26,6 +26,7 @@ import ai_engine
 import scheduler as sched
 import popularity
 import mood_scanner
+import playlist_watcher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -209,6 +210,17 @@ async def update_config(body: dict):
     if "mood_scan_enabled" in body:
         if body["mood_scan_enabled"] not in ("true", "false", True, False):
             raise HTTPException(400, detail="mood_scan_enabled must be 'true' or 'false'")
+    if "navicraft_watcher_enabled" in body:
+        if body["navicraft_watcher_enabled"] not in ("true", "false", True, False):
+            raise HTTPException(400, detail="navicraft_watcher_enabled must be 'true' or 'false'")
+    if "navicraft_watcher_interval" in body:
+        try:
+            val = int(body["navicraft_watcher_interval"])
+            if val < 10 or val > 300:
+                raise ValueError
+            body["navicraft_watcher_interval"] = str(val)
+        except (ValueError, TypeError):
+            raise HTTPException(400, detail="navicraft_watcher_interval must be 10-300 (seconds)")
     if "timezone" in body:
         try:
             from zoneinfo import ZoneInfo
@@ -432,6 +444,66 @@ async def toggle_continuous_mood(body: dict):
         return {"status": "stopped", "continuous": False}
     else:
         raise HTTPException(400, detail="action must be 'start' or 'stop'")
+
+
+# =========================================================================
+# Navidrome Playlist Watcher
+# =========================================================================
+
+@app.get("/api/watcher/status")
+async def watcher_status():
+    """Get the Navidrome playlist watcher status."""
+    return playlist_watcher.get_watcher_status()
+
+
+class PluginGenerateRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    max_songs: int = Field(default=25, ge=5, le=100)
+    target_duration_min: Optional[int] = Field(default=None, ge=5, le=600)
+    provider: Optional[str] = Field(default=None, description="AI provider override: 'claude' or 'gemini'")
+
+
+# Rate limiting for /api/plugin/generate (separate from /api/generate)
+_last_plugin_generate_time = 0.0
+
+
+@app.post("/api/plugin/generate")
+async def plugin_generate(req: PluginGenerateRequest):
+    """Synchronous playlist generation endpoint for plugins/external integrations.
+
+    Unlike /api/generate (SSE streaming), this returns the full result in one response.
+    Returns Navidrome song IDs ready for playlist creation.
+    """
+    global _last_plugin_generate_time
+    now = time.time()
+    if now - _last_plugin_generate_time < _GENERATE_COOLDOWN:
+        remaining = int(_GENERATE_COOLDOWN - (now - _last_plugin_generate_time))
+        raise HTTPException(429, detail=f"Please wait {remaining}s before generating again")
+    _last_plugin_generate_time = now
+
+    if req.provider and req.provider not in ("claude", "gemini"):
+        raise HTTPException(400, detail="provider must be 'claude' or 'gemini'")
+
+    with db.get_db() as conn:
+        stats = db.get_library_stats(conn)
+    if stats["song_count"] == 0:
+        raise HTTPException(404, detail="Library index is empty. Run a scan first.")
+
+    parsed = {
+        "prompt": req.prompt,
+        "max_songs": req.max_songs,
+        "target_duration_min": req.target_duration_min,
+    }
+
+    try:
+        result = await playlist_watcher.generate_playlist(None, parsed, save=False, provider=req.provider)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    except Exception:
+        logger.exception("Plugin generate failed")
+        raise HTTPException(500, detail="Playlist generation failed. Check logs.")
+
+    return result
 
 
 # =========================================================================

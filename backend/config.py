@@ -16,6 +16,7 @@ EDITABLE_FIELDS = {
     "timezone",
     "mood_scan_enabled",
     "mood_scan_from_hour", "mood_scan_to_hour",
+    "navicraft_watcher_enabled", "navicraft_watcher_interval",
 }
 
 # Fields that contain secrets (masked in GET responses)
@@ -99,6 +100,10 @@ class Config:
     mood_scan_from_hour: int = 0   # Schedule window start (0-23)
     mood_scan_to_hour: int = 6     # Schedule window end (0-23)
 
+    # Navidrome playlist watcher (detects [navicraft, ...] playlists)
+    navicraft_watcher_enabled: bool = False
+    navicraft_watcher_interval: int = 30  # seconds between polls
+
     # AI settings
     max_candidates: int = field(default_factory=lambda: int(os.getenv("MAX_CANDIDATES", "500")))
 
@@ -135,7 +140,7 @@ class Config:
             self.timezone = "UTC"
 
         raw_mood_enabled = _resolve("MOOD_SCAN_ENABLED", "false", overrides, "mood_scan_enabled")
-        self.mood_scan_enabled = raw_mood_enabled.lower() in ("true", "1", "yes")
+        self.mood_scan_enabled = str(raw_mood_enabled).lower() in ("true", "1", "yes")
         raw_from = _resolve("MOOD_SCAN_FROM_HOUR", "0", overrides, "mood_scan_from_hour")
         try:
             self.mood_scan_from_hour = max(0, min(23, int(raw_from)))
@@ -146,6 +151,14 @@ class Config:
             self.mood_scan_to_hour = max(0, min(23, int(raw_to)))
         except (ValueError, TypeError):
             self.mood_scan_to_hour = 6
+
+        raw_watcher = _resolve("NAVICRAFT_WATCHER_ENABLED", "false", overrides, "navicraft_watcher_enabled")
+        self.navicraft_watcher_enabled = str(raw_watcher).lower() in ("true", "1", "yes")
+        raw_interval = _resolve("NAVICRAFT_WATCHER_INTERVAL", "30", overrides, "navicraft_watcher_interval")
+        try:
+            self.navicraft_watcher_interval = max(10, min(300, int(raw_interval)))
+        except (ValueError, TypeError):
+            self.navicraft_watcher_interval = 30
 
     def get_editable(self) -> dict:
         """Return editable config values, masking secrets."""

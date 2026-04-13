@@ -16,6 +16,7 @@ import navidrome
 import plex
 import popularity
 import mood_scanner
+import playlist_watcher
 import database as db
 
 logger = logging.getLogger(__name__)
@@ -200,14 +201,28 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # Navidrome playlist watcher — polls for [navicraft, ...] playlists.
+    # Always registered (checks config.navicraft_watcher_enabled at runtime)
+    # so enabling via Settings takes effect without a container restart.
+    _scheduler.add_job(
+        playlist_watcher.check_navidrome_playlists,
+        trigger=IntervalTrigger(seconds=config.navicraft_watcher_interval),
+        id="navicraft_watcher",
+        name="Navidrome playlist watcher",
+        replace_existing=True,
+    )
+
     _scheduler.start()
     logger.info(
-        "Scheduler started: scanning every %dh, enrichment every 2m, mood scan %s (%d tracks, window %02d:00–%02d:00 %s)",
+        "Scheduler started: scanning every %dh, enrichment every 2m, mood scan %s (%d tracks, window %02d:00–%02d:00 %s), "
+        "playlist watcher %s (every %ds)",
         config.scan_interval_hours,
         "enabled" if config.mood_scan_enabled else "disabled",
         config.mood_scan_batch_size,
         config.mood_scan_from_hour, config.mood_scan_to_hour,
         config.timezone,
+        "enabled" if config.navicraft_watcher_enabled else "disabled",
+        config.navicraft_watcher_interval,
     )
 
 

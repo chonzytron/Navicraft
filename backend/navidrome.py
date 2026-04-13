@@ -212,5 +212,52 @@ async def get_playlists() -> list[dict]:
     ]
 
 
+async def update_playlist(playlist_id: str, name: str = None, song_ids_to_add: list[str] = None) -> dict:
+    """Update a playlist in Navidrome — rename and/or add songs."""
+    salt = secrets.token_hex(8)
+    token = hashlib.md5((config.navidrome_password + salt).encode()).hexdigest()
+
+    query_params = [
+        ("u", config.navidrome_user),
+        ("t", token),
+        ("s", salt),
+        ("v", "1.16.1"),
+        ("c", "navicraft"),
+        ("f", "json"),
+        ("playlistId", playlist_id),
+    ]
+    if name:
+        query_params.append(("name", name))
+    if song_ids_to_add:
+        for sid in song_ids_to_add:
+            query_params.append(("songIdToAdd", sid))
+
+    data = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.get(_api_url("updatePlaylist"), params=query_params)
+                resp.raise_for_status()
+                data = resp.json()
+            break
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            if attempt < 2:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Playlist update failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
+                await asyncio.sleep(wait)
+            else:
+                raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
+
+    if data is None:
+        raise Exception("Failed to update playlist: no response received")
+
+    sr = data.get("subsonic-response", {})
+    if sr.get("status") != "ok":
+        error = sr.get("error", {})
+        raise Exception(f"Failed to update playlist: {error.get('message')}")
+
+    return {"status": "ok", "id": playlist_id}
+
+
 async def delete_playlist(playlist_id: str):
     await _get("deletePlaylist", {"id": playlist_id})

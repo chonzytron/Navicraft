@@ -504,6 +504,11 @@ function _syncMoodFields(){
   $('#moodScheduleFields').classList.toggle('disabled',!on);
 }
 
+function _syncWatcherFields(){
+  const on=$('#cfgWatcherEnabled').classList.contains('on');
+  $('#watcherFields').classList.toggle('disabled',!on);
+}
+
 function pollMoodScan(){
   if(moodTimer)clearInterval(moodTimer);
   const check=async()=>{
@@ -563,9 +568,14 @@ const cfgSelectMap={
   mood_scan_from_hour:'cfgMoodScanFromHour',
   mood_scan_to_hour:'cfgMoodScanToHour',
 };
+// Numeric input fields (not text, use .value)
+const cfgNumberMap={
+  navicraft_watcher_interval:'cfgWatcherInterval',
+};
 // Toggle fields need special handling (not text inputs)
 const cfgToggleMap={
   mood_scan_enabled:'cfgMoodScanEnabled',
+  navicraft_watcher_enabled:'cfgWatcherEnabled',
 };
 
 function _populateHourSelects(){
@@ -593,12 +603,17 @@ async function openConfig(){
       const el=$('#'+elId);
       if(el)el.value=cfg[key]||'';
     }
+    for(const[key,elId]of Object.entries(cfgNumberMap)){
+      const el=$('#'+elId);
+      if(el)el.value=cfg[key]||'';
+    }
     for(const[key,elId]of Object.entries(cfgToggleMap)){
       const el=$('#'+elId);
       if(el)el.classList.toggle('on',cfg[key]==='true');
     }
   }catch(e){toast('Failed to load config','error');return}
   _syncMoodFields();
+  _syncWatcherFields();
   $('#cfgOverlay').classList.add('on');
 }
 
@@ -613,6 +628,10 @@ async function saveConfig(){
     if(el)body[key]=el.value;
   }
   for(const[key,elId]of Object.entries(cfgSelectMap)){
+    const el=$('#'+elId);
+    if(el)body[key]=el.value;
+  }
+  for(const[key,elId]of Object.entries(cfgNumberMap)){
     const el=$('#'+elId);
     if(el)body[key]=el.value;
   }

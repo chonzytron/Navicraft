@@ -115,7 +115,9 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .mood-label{cursor:pointer;transition:color .2s}
 .mood-label:hover{color:var(--text-2)}
 .mood-label.active{color:#e8a317}
-#moodScheduleFields.disabled{opacity:.35;pointer-events:none}
+#moodScheduleFields.disabled,#watcherFields.disabled{opacity:.35;pointer-events:none}
+.cfg-hint{font-size:.8rem;color:var(--text-4);margin:.25rem 0 0;line-height:1.4}
+.cfg-hint code{background:rgba(255,255,255,.08);padding:.1em .35em;border-radius:3px;font-size:.78rem}
 
 /* --- Media server status --- */
 .srv-status{display:flex;align-items:center;gap:12px;padding-left:54px}

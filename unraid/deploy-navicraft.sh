@@ -48,7 +48,8 @@ SOURCE_PATH="/mnt/user/appdata/navicraft/source"
 # NOTE: Navidrome, Plex, AI provider/keys/models, Last.fm API key,
 # scan interval, and mood/theme tagging settings are now configurable
 # from the Settings gear icon in the web UI. Those settings persist
-# in /data/navicraft_config.json.
+# in /data/navicraft_config.json. This includes the Navidrome Playlist
+# Watcher, which lets you create AI playlists directly from Navidrome.
 #
 # You can still pass them as env vars below for initial bootstrap or
 # headless deployments. Env vars act as defaults — UI settings override them.
@@ -70,6 +71,8 @@ SOURCE_PATH="/mnt/user/appdata/navicraft/source"
 # MOOD_SCAN_ENABLED="false"
 # MOOD_SCAN_BATCH_SIZE="50"
 # MOOD_SCAN_INTERVAL_HOURS="24"
+# NAVICRAFT_WATCHER_ENABLED="false"
+# NAVICRAFT_WATCHER_INTERVAL="30"
 
 # =============================================================================
 # DEPLOYMENT — No need to edit below this line
@@ -136,6 +139,8 @@ OPTIONAL_ENVS=()
 [ -n "${MOOD_SCAN_ENABLED:-}" ]   && OPTIONAL_ENVS+=(-e "MOOD_SCAN_ENABLED=$MOOD_SCAN_ENABLED")
 [ -n "${MOOD_SCAN_BATCH_SIZE:-}" ] && OPTIONAL_ENVS+=(-e "MOOD_SCAN_BATCH_SIZE=$MOOD_SCAN_BATCH_SIZE")
 [ -n "${MOOD_SCAN_INTERVAL_HOURS:-}" ] && OPTIONAL_ENVS+=(-e "MOOD_SCAN_INTERVAL_HOURS=$MOOD_SCAN_INTERVAL_HOURS")
+[ -n "${NAVICRAFT_WATCHER_ENABLED:-}" ] && OPTIONAL_ENVS+=(-e "NAVICRAFT_WATCHER_ENABLED=$NAVICRAFT_WATCHER_ENABLED")
+[ -n "${NAVICRAFT_WATCHER_INTERVAL:-}" ] && OPTIONAL_ENVS+=(-e "NAVICRAFT_WATCHER_INTERVAL=$NAVICRAFT_WATCHER_INTERVAL")
 
 docker run -d \
     --name="$CONTAINER_NAME" \

@@ -233,6 +233,27 @@
     Required="false"
     Mask="false"></Config>
 
+  <!-- Navidrome Playlist Watcher (configurable in UI) -->
+  <Config
+    Name="Playlist Watcher Enabled"
+    Target="NAVICRAFT_WATCHER_ENABLED"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. Set to 'true' to enable the Navidrome playlist watcher. Create an empty playlist named 'your prompt [navicraft]' in Navidrome and it will be auto-populated. Default: false"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Playlist Watcher Interval (seconds)"
+    Target="NAVICRAFT_WATCHER_INTERVAL"
+    Default=""
+    Description="Optional initial default. Configurable from Settings in the web UI. How often (in seconds) to poll Navidrome for new [navicraft] playlists. Range: 10-300. Default: 30"
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
+
   <!-- Internal paths -->
   <Config
     Name="Music Dir (container)"

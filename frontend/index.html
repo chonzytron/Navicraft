@@ -290,6 +290,20 @@
           </label>
         </div>
       </div>
+      <div class="cfg-section">
+        <h3>Navidrome Playlist Watcher</h3>
+        <label class="cfg-field cfg-toggle-field">
+          <span>Playlist Watcher</span>
+          <div class="toggle-track" id="cfgWatcherEnabled" onclick="this.classList.toggle('on');_syncWatcherFields()"></div>
+        </label>
+        <div id="watcherFields">
+          <label class="cfg-field">
+            <span>Poll Interval (seconds)</span>
+            <input type="number" id="cfgWatcherInterval" min="10" max="300" step="5" placeholder="30">
+          </label>
+        </div>
+        <p class="cfg-hint">Create an empty playlist in Navidrome named <code>your prompt [navicraft]</code> to auto-generate. Supports <code>[navicraft, songs: 30]</code> and <code>[navicraft, duration: 90]</code>.</p>
+      </div>
     </div>
     <div class="cfg-footer">
       <button class="btn btn-ghost" onclick="closeConfig()">Cancel</button>

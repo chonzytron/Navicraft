@@ -15,6 +15,7 @@ and populated with the matched songs.
 """
 
 import asyncio
+import collections
 import logging
 import re
 import time
@@ -39,8 +40,17 @@ _SONGS_RE = re.compile(r"songs\s*:\s*(\d+)", re.IGNORECASE)
 _in_progress: set[str] = set()
 
 # Track playlists we've already processed (by ID) to avoid re-processing
-# after rename (in case getPlaylists returns stale data)
-_processed: set[str] = set()
+# after rename (in case getPlaylists returns stale data).
+# Uses OrderedDict as an ordered set so we can evict oldest entries.
+_processed: collections.OrderedDict[str, float] = collections.OrderedDict()
+_PROCESSED_MAX = 500
+
+# Guard against overlapping watcher invocations
+_watcher_running = False
+
+# Rate limiting for watcher-triggered AI calls (seconds between generations)
+_last_generate_time = 0.0
+_GENERATE_COOLDOWN = 10
 
 # Last watcher run status for the status endpoint
 _watcher_status = {
@@ -111,18 +121,24 @@ _POPULARITY_PATTERNS = re.compile(
 )
 
 
-async def _generate_for_playlist(playlist_id: str | None, parsed: dict, save: bool = True):
-    """Run the two-pass AI generation pipeline and populate the playlist.
+async def generate_playlist(
+    playlist_id: str | None,
+    parsed: dict,
+    save: bool = True,
+    provider: str | None = None,
+):
+    """Run the two-pass AI generation pipeline and optionally populate a playlist.
 
     When save=True and playlist_id is set, updates the Navidrome playlist.
     When save=False, returns the result without touching Navidrome.
+    provider overrides the default AI provider when set.
     """
     prompt = parsed["prompt"]
     max_songs = parsed["max_songs"]
     target_duration_min = parsed["target_duration_min"]
 
-    logger.info("Generating playlist for prompt: '%s' (songs=%d, duration=%s)",
-                prompt, max_songs, target_duration_min)
+    logger.info("Generating playlist for prompt: '%s' (songs=%d, duration=%s, provider=%s)",
+                prompt, max_songs, target_duration_min, provider or config.ai_provider)
 
     # --- Pass 1: Extract intent ---
     with db.get_db() as conn:
@@ -141,7 +157,7 @@ async def _generate_for_playlist(playlist_id: str | None, parsed: dict, save: bo
     if stats["song_count"] == 0:
         raise ValueError("Library index is empty. Run a scan first.")
 
-    filters = await ai_engine.pass1_extract_intent(prompt, library_summary)
+    filters = await ai_engine.pass1_extract_intent(prompt, library_summary, provider)
 
     # Detect popularity mode
     popularity_mode = bool(filters.get("popularity_mode")) or bool(_POPULARITY_PATTERNS.search(prompt))
@@ -185,6 +201,7 @@ async def _generate_for_playlist(playlist_id: str | None, parsed: dict, save: bo
         prompt=prompt,
         candidates=candidates,
         max_songs=max_songs,
+        provider=provider,
         target_duration_min=target_duration_min,
         filters=filters,
     )
@@ -272,70 +289,90 @@ async def _generate_for_playlist(playlist_id: str | None, parsed: dict, save: bo
     }
 
 
+def _mark_processed(playlist_id: str):
+    """Add a playlist ID to the processed set, evicting oldest if at capacity."""
+    _processed[playlist_id] = time.time()
+    while len(_processed) > _PROCESSED_MAX:
+        _processed.popitem(last=False)
+
+
 async def check_navidrome_playlists():
     """Poll Navidrome for playlists matching the [navicraft, ...] pattern.
 
     Called periodically by the scheduler.
     """
+    global _watcher_running, _last_generate_time
+
     if not config.navicraft_watcher_enabled:
         return
 
     if not config.navidrome_url or not config.navidrome_password:
         return
 
-    _watcher_status["last_check"] = time.time()
+    # Guard against overlapping invocations (scheduler fires while previous is still running)
+    if _watcher_running:
+        return
+    _watcher_running = True
 
     try:
-        playlists = await navidrome.get_playlists()
-    except Exception as e:
-        logger.warning("Watcher: failed to fetch playlists: %s", e)
-        _watcher_status["last_error"] = str(e)
-        return
-
-    found = 0
-    for pl in playlists:
-        pl_id = pl["id"]
-        pl_name = pl.get("name", "")
-        song_count = pl.get("songCount", 0)
-
-        # Skip already processed or in-progress playlists
-        if pl_id in _processed or pl_id in _in_progress:
-            continue
-
-        # Only process empty playlists with the [navicraft] tag
-        if song_count > 0:
-            continue
-
-        parsed = parse_navicraft_tag(pl_name)
-        if not parsed:
-            continue
-
-        found += 1
-        _in_progress.add(pl_id)
+        _watcher_status["last_check"] = time.time()
 
         try:
-            result = await _generate_for_playlist(pl_id, parsed, save=True)
-            _processed.add(pl_id)
-            _watcher_status["last_generated"] = {
-                "playlist_id": pl_id,
-                "name": result["name"],
-                "songs": result["total_songs"],
-                "duration": result["total_duration"],
-                "prompt": parsed["prompt"],
-                "time": time.time(),
-            }
-            _watcher_status["total_generated"] = _watcher_status.get("total_generated", 0) + 1
-            _watcher_status["last_error"] = None
+            playlists = await navidrome.get_playlists()
         except Exception as e:
-            logger.exception("Watcher: failed to generate playlist for '%s'", pl_name)
-            _watcher_status["last_error"] = f"Failed for '{parsed['prompt'][:50]}': {e}"
-            # Mark as processed to avoid retrying the same broken prompt endlessly
-            _processed.add(pl_id)
-        finally:
-            _in_progress.discard(pl_id)
+            logger.warning("Watcher: failed to fetch playlists: %s", e)
+            _watcher_status["last_error"] = str(e)
+            return
 
-    _watcher_status["playlists_found"] = found
+        found = 0
+        for pl in playlists:
+            pl_id = pl["id"]
+            pl_name = pl.get("name", "")
+            song_count = pl.get("songCount", 0)
 
-    # Prune the processed set to avoid unbounded growth (keep last 500)
-    if len(_processed) > 500:
-        _processed.clear()
+            # Skip already processed or in-progress playlists
+            if pl_id in _processed or pl_id in _in_progress:
+                continue
+
+            # Only process empty playlists with the [navicraft] tag
+            if song_count > 0:
+                continue
+
+            parsed = parse_navicraft_tag(pl_name)
+            if not parsed:
+                continue
+
+            # Rate limit: wait between AI generations
+            now = time.time()
+            if now - _last_generate_time < _GENERATE_COOLDOWN:
+                logger.info("Watcher: rate limited, skipping '%s' until next cycle", pl_name[:60])
+                continue
+
+            found += 1
+            _in_progress.add(pl_id)
+
+            try:
+                result = await generate_playlist(pl_id, parsed, save=True)
+                _last_generate_time = time.time()
+                _mark_processed(pl_id)
+                _watcher_status["last_generated"] = {
+                    "playlist_id": pl_id,
+                    "name": result["name"],
+                    "songs": result["total_songs"],
+                    "duration": result["total_duration"],
+                    "prompt": parsed["prompt"],
+                    "time": time.time(),
+                }
+                _watcher_status["total_generated"] += 1
+                _watcher_status["last_error"] = None
+            except Exception as e:
+                logger.exception("Watcher: failed to generate playlist for '%s'", pl_name)
+                _watcher_status["last_error"] = f"Failed for '{parsed['prompt'][:50]}': {e}"
+                # Mark as processed to avoid retrying the same broken prompt endlessly
+                _mark_processed(pl_id)
+            finally:
+                _in_progress.discard(pl_id)
+
+        _watcher_status["playlists_found"] = found
+    finally:
+        _watcher_running = False

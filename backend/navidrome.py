@@ -232,6 +232,7 @@ async def update_playlist(playlist_id: str, name: str = None, song_ids_to_add: l
         for sid in song_ids_to_add:
             query_params.append(("songIdToAdd", sid))
 
+    data = None
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
@@ -246,6 +247,9 @@ async def update_playlist(playlist_id: str, name: str = None, song_ids_to_add: l
                 await asyncio.sleep(wait)
             else:
                 raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
+
+    if data is None:
+        raise Exception("Failed to update playlist: no response received")
 
     sr = data.get("subsonic-response", {})
     if sr.get("status") != "ok":

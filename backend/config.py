@@ -140,7 +140,7 @@ class Config:
             self.timezone = "UTC"
 
         raw_mood_enabled = _resolve("MOOD_SCAN_ENABLED", "false", overrides, "mood_scan_enabled")
-        self.mood_scan_enabled = raw_mood_enabled.lower() in ("true", "1", "yes")
+        self.mood_scan_enabled = str(raw_mood_enabled).lower() in ("true", "1", "yes")
         raw_from = _resolve("MOOD_SCAN_FROM_HOUR", "0", overrides, "mood_scan_from_hour")
         try:
             self.mood_scan_from_hour = max(0, min(23, int(raw_from)))
@@ -153,7 +153,7 @@ class Config:
             self.mood_scan_to_hour = 6
 
         raw_watcher = _resolve("NAVICRAFT_WATCHER_ENABLED", "false", overrides, "navicraft_watcher_enabled")
-        self.navicraft_watcher_enabled = raw_watcher.lower() in ("true", "1", "yes")
+        self.navicraft_watcher_enabled = str(raw_watcher).lower() in ("true", "1", "yes")
         raw_interval = _resolve("NAVICRAFT_WATCHER_INTERVAL", "30", overrides, "navicraft_watcher_interval")
         try:
             self.navicraft_watcher_interval = max(10, min(300, int(raw_interval)))

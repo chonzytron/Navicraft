@@ -287,7 +287,7 @@ cd navidrome-plugin/
 go mod tidy
 
 # Build the WASM module
-tinygo build -o plugin.wasm -target wasip1 -buildmode=c-shared .
+tinygo build -o plugin.wasm -target wasip1 .
 
 # Package as .ndp file
 zip -j navicraft.ndp manifest.json plugin.wasm

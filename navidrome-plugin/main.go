@@ -4,7 +4,7 @@
 // and delegates AI playlist generation to the NaviCraft backend.
 //
 // Build with TinyGo:
-//   tinygo build -o plugin.wasm -target wasip1 -buildmode=c-shared .
+//   tinygo build -o plugin.wasm -target wasip1 .
 //
 // Package as .ndp:
 //   zip -j navicraft.ndp manifest.json plugin.wasm
@@ -38,17 +38,16 @@ func getConfig() PluginConfig {
 		DefaultSongs:        25,
 	}
 
-	// Read config from host
-	configBytes := pdk.GetConfig("navicraftUrl")
-	if configBytes != "" {
-		cfg.NaviCraftURL = configBytes
+	// Read config from host — GetConfig returns (string, bool)
+	if v, ok := pdk.GetConfig("navicraftUrl"); ok && v != "" {
+		cfg.NaviCraftURL = v
 	}
-	if v := pdk.GetConfig("pollIntervalSeconds"); v != "" {
+	if v, ok := pdk.GetConfig("pollIntervalSeconds"); ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.PollIntervalSeconds = n
 		}
 	}
-	if v := pdk.GetConfig("defaultSongs"); v != "" {
+	if v, ok := pdk.GetConfig("defaultSongs"); ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.DefaultSongs = n
 		}
@@ -211,9 +210,9 @@ func ndSchedulerCallback() int32 {
 			continue
 		}
 
-		// Check if already processed (use cache to avoid re-processing)
+		// Check if already processed (use Extism vars to avoid re-processing)
 		cacheKey := "processed:" + pl.ID
-		if cached, ok := pdk.GetVar(cacheKey); ok && len(cached) > 0 {
+		if cached := pdk.GetVar(cacheKey); len(cached) > 0 {
 			continue
 		}
 
@@ -241,16 +240,15 @@ func ndSchedulerCallback() int32 {
 		}
 
 		var genResp GenerateResponse
-		if err := json.Unmarshal(resp.Body(), &genResp); err != nil {
-			pdk.Log(pdk.LogError, fmt.Sprintf("Failed to parse NaviCraft response: %v", err))
+		if unmarshalErr := json.Unmarshal(resp.Body(), &genResp); unmarshalErr != nil {
+			pdk.Log(pdk.LogError, fmt.Sprintf("Failed to parse NaviCraft response: %v", unmarshalErr))
 			pdk.SetVar(cacheKey, []byte("error"))
 			continue
 		}
 
 		// Step 3: Update the playlist in Navidrome via SubsonicAPI host service
-		err := updatePlaylistViaHost(pl.ID, genResp.Name, genResp.NavidromeSongIDs)
-		if err != nil {
-			pdk.Log(pdk.LogError, fmt.Sprintf("Failed to update playlist: %v", err))
+		if updateErr := updatePlaylistViaHost(pl.ID, genResp.Name, genResp.NavidromeSongIDs); updateErr != nil {
+			pdk.Log(pdk.LogError, fmt.Sprintf("Failed to update playlist: %v", updateErr))
 			continue
 		}
 

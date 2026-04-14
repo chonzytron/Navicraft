@@ -58,6 +58,7 @@ Most settings (servers, AI keys, models, Last.fm, scan interval, mood/theme tagg
 | `WEB_PORT` | `8085` | Web UI port |
 | `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,...` | Audio file extensions to scan |
 | `MAX_CANDIDATES` | `500` | Max songs passed to AI Pass 2 |
+| `MOOD_SCAN_BATCH_SIZE` | `50` | Tracks to process per mood scan batch (env var only) |
 
 ### UI-configurable settings
 
@@ -72,14 +73,13 @@ These are set from the Settings panel in the web UI. They can also be pre-set as
 | Plex Token | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
 | AI Provider | `claude` | `claude` or `gemini` |
 | Claude API Key | — | Anthropic API key |
-| Claude Model | `claude-3-5-sonnet-20241022` | Claude model |
+| Claude Model | `claude-sonnet-4-6` | Claude model |
 | Gemini API Key | — | Google Gemini API key |
 | Gemini Model | `gemini-2.5-flash` | Gemini model |
 | Last.fm API Key | — | Last.fm API key (free, improves popularity) |
 | Scan Interval | `6` hours | How often to auto-scan the library |
 | Timezone | `UTC` | IANA timezone for schedule window (e.g. `America/New_York`) |
 | Mood Scan Enabled | `false` | Enable Essentia-based mood/theme audio analysis |
-| Mood Scan Batch Size | `50` | Tracks to process per mood scan run |
 | Mood Scan From Hour | `0` (midnight) | Schedule window start hour (0–23) |
 | Mood Scan To Hour | `6` (6 AM) | Schedule window end hour (0–23) |
 | Playlist Watcher Enabled | `false` | Enable Navidrome `[navicraft]` playlist detection |

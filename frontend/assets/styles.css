@@ -65,10 +65,6 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .btn-gen:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 24px var(--accent-glow)}
 .btn-gen:disabled{opacity:.4;cursor:not-allowed}
 
-/* --- Spinner (used by scan bar) --- */
-.spinner{width:40px;height:40px;border:2.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 18px}
-@keyframes spin{to{transform:rotate(360deg)}}
-
 /* --- Results --- */
 .results{display:none}
 .results.on{display:block}
@@ -100,21 +96,6 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .btn-ghost{background:transparent;color:var(--text-3);border:1px solid var(--border)}
 .btn-ghost:hover{border-color:var(--text-3);color:var(--text-2)}
 
-/* --- Enrichment indicator --- */
-.enrich-bar{display:none;padding:6px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px;font-family:var(--mono);color:var(--text-4);flex-direction:column;gap:4px}
-.enrich-bar.on{display:flex}
-.enrich-row{display:flex;align-items:center;gap:6px;font-size:11px}
-.enrich-label{width:42px;text-align:right;flex-shrink:0}
-.enrich-track{flex:1;background:var(--surface-3);border-radius:2px;height:3px;min-width:0}
-.enrich-fill{height:3px;border-radius:2px;transition:width .5s;width:0%}
-.enrich-fill.deezer{background:var(--green)}
-.enrich-fill.lastfm{background:var(--accent)}
-.enrich-fill.musicbrainz{background:#ba478f}
-.enrich-fill.mood-scan{background:#e8a317}
-.enrich-pct{width:38px;text-align:right;flex-shrink:0}
-.mood-label{cursor:pointer;transition:color .2s}
-.mood-label:hover{color:var(--text-2)}
-.mood-label.active{color:#e8a317}
 #moodScheduleFields.disabled,#watcherFields.disabled{opacity:.35;pointer-events:none}
 .cfg-hint{font-size:.8rem;color:var(--text-4);margin:.25rem 0 0;line-height:1.4}
 .cfg-hint code{background:rgba(255,255,255,.08);padding:.1em .35em;border-radius:3px;font-size:.78rem}
@@ -149,12 +130,6 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .pvd-btn.on.pvd-claude svg{color:#e8a87c}
 .pvd-btn.on.pvd-gemini svg{color:#7ab4ff}
 .pvd-model{font-family:var(--mono);font-size:10px;color:var(--text-4);margin-left:2px;opacity:.7}
-
-/* --- Scan bar --- */
-.scan-bar{display:none;padding:12px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:24px;font-size:13px;color:var(--text-3)}
-.scan-bar.on{display:flex;align-items:center;gap:10px}
-.scan-bar .spinner{width:14px;height:14px;margin:0;border-width:2px}
-.scan-pct{font-family:var(--mono);color:var(--text-4);font-size:11px}
 
 /* --- Config button --- */
 .cfg-btn{background:none;border:1px solid var(--border);border-radius:var(--radius);padding:10px;cursor:pointer;color:var(--text-3);display:grid;place-items:center;transition:all .2s;line-height:0}

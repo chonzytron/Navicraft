@@ -148,101 +148,94 @@ function setMode(m){
   $('#targetMin').style.display=m==='duration'?'':'none';
 }
 
+// --- Unified activity log ---
+let _logEntries=[];
+let _logAutoHideTimer=null;
+let _logLocked=false;
+
+function _log(text,sub){
+  _logEntries.push({text,sub:sub||null});
+  _renderLog();
+  if(!_logLocked)_resetLogTimer();
+}
+
+function _renderLog(){
+  const el=$('#processLog');
+  el.innerHTML=_logEntries.map(({text,sub})=>{
+    if(sub)return`<div class="scan-log-line">${esc(text)}<br><span class="scan-log-sub">${esc(sub)}</span></div>`;
+    return`<div class="scan-log-line">${esc(text)}</div>`;
+  }).join('');
+  el.classList.add('on');
+}
+
+function _clearLog(){
+  _logEntries=[];
+  _logLocked=false;
+  const el=$('#processLog');
+  el.onclick=null;
+  el.innerHTML='';
+  el.classList.remove('on','clickable');
+  if(_logAutoHideTimer){clearTimeout(_logAutoHideTimer);_logAutoHideTimer=null;}
+}
+
+function _resetLogTimer(){
+  if(_logAutoHideTimer)clearTimeout(_logAutoHideTimer);
+  _logAutoHideTimer=setTimeout(()=>{_clearLog();_logAutoHideTimer=null;},30000);
+}
+
 // --- Scan ---
+let _lastScanPhase=null;
+
 async function triggerScan(){
   try{
-    _clearScanLog();
+    _clearLog();
     await api('/scan',{method:'POST'});
     toast('Scan started','info');
-    pollScan(true);
+    pollScan();
   }catch(e){toast(e.message,'error')}
 }
 
-function pollScan(showLog=false){
+function pollScan(){
   if(scanPollTimer)clearInterval(scanPollTimer);
   let seenActive=false;
   scanPollTimer=setInterval(async()=>{
     try{
       const s=await api('/scan/status');
       if(s.phase!=='idle')seenActive=true;
+      if(s.phase!==_lastScanPhase){
+        _lastScanPhase=s.phase;
+        if(s.phase==='discovering') _log('Discovering music files...');
+        else if(s.phase==='scanning') _log('Scanning library...');
+        else if(s.phase==='syncing') _log('Syncing media server IDs...');
+        else if(s.phase==='enriching') _log('Fetching popularity data...');
+        else if(s.phase==='cleanup'||s.phase==='health_check') _log('Running health check & cleanup...');
+        else if(s.phase==='idle'&&seenActive){
+          if(s.log&&s.log.length)s.log.forEach(e=>{
+            const m=e.match(/^(.*?)(\s*\([^)]+\))$/);
+            if(m)_log(m[1].trim(),m[2].trim());else _log(e);
+          });
+          loadStats();
+        }
+      }
       if(s.phase==='idle'&&(seenActive||!s.scanning)){
         clearInterval(scanPollTimer);
         scanPollTimer=null;
-        $('#scanBar').classList.remove('on');
-        if(seenActive)loadStats();
-        if(showLog&&s.log&&s.log.length) _showScanLog(s.log);
-      }else if(s.phase!=='idle'){
-        $('#scanBar').classList.add('on');
-        $('#scanMsg').textContent=s.message||'Scanning...';
-        $('#scanPct').textContent=s.total?`${s.current}/${s.total}`:'';
       }
     }catch{}
   },1500);
   setTimeout(()=>{if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null}},600000);
 }
 
-let scanLogTimer=null;
-
-function _showScanLog(entries){
-  const el=$('#scanLog');
-  el.onclick=null;
-  el.innerHTML=entries.map(l=>{
-    const m=l.match(/^(.*?)(\s*\([^)]+\))$/);
-    if(m)return`<div class="scan-log-line">${esc(m[1].trim())}<br><span class="scan-log-sub">${esc(m[2].trim())}</span></div>`;
-    return`<div class="scan-log-line">${esc(l)}</div>`;
-  }).join('');
-  el.classList.add('on');
-  if(scanLogTimer)clearTimeout(scanLogTimer);
-  scanLogTimer=setTimeout(()=>{_clearScanLog();scanLogTimer=null},30000);
-  setTimeout(()=>{ el.onclick=_clearScanLog; },500);
-}
-
-function _clearScanLog(){
-  const el=$('#scanLog');
-  el.onclick=null;
-  el.innerHTML='';
-  el.classList.remove('on');
-  if(scanLogTimer){clearTimeout(scanLogTimer);scanLogTimer=null}
-}
-
 // --- Generate (SSE streaming) ---
-let processLogEntries=[];
-let processLogLive=false;
-
-function _clearProcessLog(){
-  processLogEntries=[];
-  const el=$('#processLog');
-  el.onclick=null;
-  el.innerHTML='';
-  el.classList.remove('on','clickable');
-  processLogLive=false;
-}
-
-function _addProcessLog(text,sub){
-  processLogEntries.push({text,sub:sub||null});
-  _renderProcessLog();
-}
-
-function _renderProcessLog(){
-  const el=$('#processLog');
-  el.innerHTML=processLogEntries.map(({text,sub})=>{
-    if(sub){
-      return `<div class="scan-log-line">${esc(text)}<br><span class="scan-log-sub">${esc(sub)}</span></div>`;
-    }
-    return `<div class="scan-log-line">${esc(text)}</div>`;
-  }).join('');
-  el.classList.add('on');
-}
-
 function _fmtRange(lo,hi){
   if(lo==null&&hi==null)return'';
-  return `${lo!=null?lo:'?'}–${hi!=null?hi:'?'}`;
+  return`${lo!=null?lo:'?'}–${hi!=null?hi:'?'}`;
 }
 
 function _joinList(arr,max=6){
   if(!arr||!arr.length)return'';
   if(arr.length<=max)return arr.join(', ');
-  return `${arr.slice(0,max).join(', ')} +${arr.length-max} more`;
+  return`${arr.slice(0,max).join(', ')} +${arr.length-max} more`;
 }
 
 function renderProgressEvent(data){
@@ -250,7 +243,7 @@ function renderProgressEvent(data){
   const msg=data.message;
   switch(phase){
     case'pass1':
-      _addProcessLog('Pass 1 — analyzing your prompt');
+      _log('Pass 1 — analyzing your prompt');
       break;
     case'pass1_done':{
       const f=data.filters||{};
@@ -265,11 +258,11 @@ function renderProgressEvent(data){
       if(f.keywords&&f.keywords.length)parts.push(`Keywords: ${_joinList(f.keywords,5)}`);
       if(f.exclude_genres&&f.exclude_genres.length)parts.push(`Not: ${_joinList(f.exclude_genres,4)}`);
       if(f.exclude_artists&&f.exclude_artists.length)parts.push(`Not artists: ${_joinList(f.exclude_artists,4)}`);
-      _addProcessLog('Pass 1 complete — intent extracted',parts.length?parts.join(' · '):'No specific filters — using open search');
+      _log('Pass 1 complete — intent extracted',parts.length?parts.join(' · '):'No specific filters — using open search');
       break;
     }
     case'filtering':
-      _addProcessLog('Filtering library with extracted criteria');
+      _log('Filtering library with extracted criteria');
       break;
     case'filtering_done':{
       const n=data.candidates_found||0;
@@ -277,29 +270,29 @@ function renderProgressEvent(data){
       const head=`Filtered to ${n.toLocaleString()} candidates across ${ua.toLocaleString()} artists`;
       const sample=data.sample_artists||[];
       const sub=sample.length?`Considering: ${_joinList(sample,12)}`:null;
-      _addProcessLog(head,sub);
+      _log(head,sub);
       break;
     }
     case'broadening':
-      _addProcessLog(msg||'Broadening search — too few matches');
+      _log(msg||'Broadening search — too few matches');
       break;
     case'pass2':
-      _addProcessLog(msg||'Pass 2 — AI is selecting songs from the candidate pool');
+      _log(msg||'Pass 2 — AI is selecting songs from the candidate pool');
       break;
     case'pass2_done':{
       const n=data.selected_count||0;
       const name=data.playlist_name||'';
-      _addProcessLog(`Pass 2 complete — AI picked ${n} songs`,name?`"${name}"`:null);
+      _log(`Pass 2 complete — AI picked ${n} songs`,name?`"${name}"`:null);
       break;
     }
     case'matching':
-      _addProcessLog('Matching selections back to library tracks');
+      _log('Matching selections back to library tracks');
       break;
     case'saving':
-      _addProcessLog(msg||'Saving playlist to server');
+      _log(msg||'Saving playlist to server');
       break;
     default:
-      if(msg)_addProcessLog(msg);
+      if(msg)_log(msg);
   }
 }
 
@@ -311,12 +304,11 @@ async function generate(){
   const targetMin=activeMode==='duration'?parseInt($('#targetMin').value)||90:null;
   const autoCreate=!$('#previewToggle').classList.contains('on');
 
-  _clearScanLog();
-  _clearProcessLog();
-  processLogLive=true;
+  _clearLog();
+  _logLocked=true;
   $('#genBtn').disabled=true;
   $('#results').classList.remove('on');
-  _addProcessLog('Starting generation…');
+  _log('Starting generation…');
 
   const body={prompt,max_songs:maxSongs,auto_create:autoCreate};
   if(targetMin)body.target_duration_min=targetMin;
@@ -373,15 +365,15 @@ async function generate(){
       throw new Error('No result received from server');
     }
   }catch(e){
-    _addProcessLog(`Error: ${e.message}`);
+    _log(`Error: ${e.message}`);
     toast(e.message,'error');
   }finally{
     $('#genBtn').disabled=false;
-    processLogLive=false;
+    _logLocked=false;
     // Allow the user to click to dismiss once generation has finished
     const el=$('#processLog');
     if(el.classList.contains('on')){
-      setTimeout(()=>{ el.onclick=_clearProcessLog; el.classList.add('clickable'); },500);
+      setTimeout(()=>{ el.onclick=_clearLog; el.classList.add('clickable'); },500);
     }
   }
 }
@@ -452,100 +444,56 @@ async function saveToServer(server){
 
 function reset(){
   $('#results').classList.remove('on');
-  _clearProcessLog();
+  _clearLog();
   currentResult=null;
   $('#prompt').value='';
   $('#prompt').focus();
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
-
 // --- Enrichment progress ---
-let enrichTimer=null;
+let _enrichWasIncomplete=false;
+let _enrichTimer=null;
+
 function pollEnrichment(){
-  if(enrichTimer)clearInterval(enrichTimer);
+  if(_enrichTimer)clearInterval(_enrichTimer);
   const check=async()=>{
     try{
       const s=await api('/popularity/status');
       const incomplete=s.remaining>0||s.deezer_missing>0||s.lastfm_missing>0||s.musicbrainz_missing>0;
-      if(incomplete){
-        $('#enrichBar').classList.add('on');
-        const dzPct=Math.round(s.deezer_percent??0);
-        const lfPct=Math.round(s.lastfm_percent??0);
-        const mbPct=Math.round(s.musicbrainz_percent??0);
-        $('#enrichFillDeezer').style.width=`${dzPct}%`;
-        $('#enrichTextDeezer').textContent=`${dzPct}%`;
-        $('#enrichFillLastfm').style.width=`${lfPct}%`;
-        $('#enrichTextLastfm').textContent=`${lfPct}%`;
-        $('#enrichFillMusicbrainz').style.width=`${mbPct}%`;
-        $('#enrichTextMusicbrainz').textContent=`${mbPct}%`;
-      }else{
-        $('#enrichBar').classList.remove('on');
+      if(incomplete&&!_enrichWasIncomplete){
+        _log('Popularity enrichment in progress',`${s.remaining} tracks pending`);
+        _enrichWasIncomplete=true;
+      }else if(!incomplete&&_enrichWasIncomplete){
+        _log('Popularity data up to date');
+        _enrichWasIncomplete=false;
       }
     }catch{}
   };
   check();
-  enrichTimer=setInterval(check,15000);
+  _enrichTimer=setInterval(check,15000);
 }
 
 // --- Mood scan progress ---
-let moodTimer=null;
-function _updateMoodUI(s){
-  const pct=Math.round(s.percent??0);
-  $('#moodBar').classList.add('on');
-  $('#moodFill').style.width=`${pct}%`;
-  $('#moodText').textContent=`${pct}%`;
-  $('#moodLabel').classList.toggle('active',!!s.continuous);
-  $('#moodLabel').title=s.continuous?'Click to pause':'Click to start continuous scanning';
-}
-
-function _syncMoodFields(){
-  const on=$('#cfgMoodScanEnabled').classList.contains('on');
-  $('#moodScheduleFields').classList.toggle('disabled',!on);
-}
-
-function _syncWatcherFields(){
-  const on=$('#cfgWatcherEnabled').classList.contains('on');
-  $('#watcherFields').classList.toggle('disabled',!on);
-}
+let _moodWasRunning=false;
+let _moodTimer=null;
 
 function pollMoodScan(){
-  if(moodTimer)clearInterval(moodTimer);
+  if(_moodTimer)clearInterval(_moodTimer);
   const check=async()=>{
     try{
       const s=await api('/mood/status');
-      _updateMoodUI(s);
+      if(s.running&&!_moodWasRunning){
+        _log('Mood scan running...');
+        _moodWasRunning=true;
+      }else if(!s.running&&_moodWasRunning){
+        _log('Mood scan batch complete');
+        _moodWasRunning=false;
+      }
     }catch{}
   };
   check();
-  moodTimer=setInterval(check,15000);
-}
-
-async function toggleContinuousMood(){
-  const isPlaying=$('#moodLabel').classList.contains('active');
-  const action=isPlaying?'stop':'start';
-  // Immediate visual feedback
-  $('#moodLabel').classList.toggle('active',!isPlaying);
-  try{
-    await api('/mood/continuous',{method:'POST',body:JSON.stringify({action})});
-    toast(action==='start'?'Continuous mood scan started':'Continuous mood scan paused','info');
-    // Switch to fast polling
-    if(moodTimer)clearInterval(moodTimer);
-    const fastPoll=setInterval(async()=>{
-      try{
-        const s=await api('/mood/status');
-        _updateMoodUI(s);
-        if(!s.running&&!s.continuous){
-          clearInterval(fastPoll);
-          pollMoodScan();
-        }
-      }catch{clearInterval(fastPoll);pollMoodScan()}
-    },3000);
-  }catch(e){
-    // Revert on failure
-    $('#moodLabel').classList.toggle('active',isPlaying);
-    toast(`Failed: ${e.message}`,'error');
-  }
+  _moodTimer=setInterval(check,15000);
 }
 
 // --- Config modal ---
@@ -589,6 +537,16 @@ function _populateHourSelects(){
       sel.appendChild(opt);
     }
   });
+}
+
+function _syncMoodFields(){
+  const on=$('#cfgMoodScanEnabled').classList.contains('on');
+  $('#moodScheduleFields').classList.toggle('disabled',!on);
+}
+
+function _syncWatcherFields(){
+  const on=$('#cfgWatcherEnabled').classList.contains('on');
+  $('#watcherFields').classList.toggle('disabled',!on);
 }
 
 async function openConfig(){

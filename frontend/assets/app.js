@@ -500,28 +500,34 @@ let _moodWasRunning=false;
 let _moodTimer=null;
 let _moodLogIdx=null;
 
+function _moodSub(s){
+  const pct=Math.round(s.percent??0);
+  const overall=`${pct}% (${s.scanned??0}/${s.total??0} tracks)`;
+  return s.batch_total>0?`${overall} · batch ${s.batch_current}/${s.batch_total}`:overall;
+}
+
 function pollMoodScan(){
   if(_moodTimer)clearInterval(_moodTimer);
   const check=async()=>{
     try{
       const s=await api('/mood/status');
-      const pct=Math.round(s.percent??0);
+      const sub=_moodSub(s);
       if(s.running&&!_moodWasRunning){
         _moodLogIdx=_logEntries.length;
-        _log('Mood scan running...',`${pct}%`);
+        _log('Mood scan running...',sub);
         _moodWasRunning=true;
       }else if(s.running&&_moodWasRunning){
         if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
-          _logEntries[_moodLogIdx].sub=`${pct}%`;
+          _logEntries[_moodLogIdx].sub=sub;
           _renderLog();
         }else{
           _moodLogIdx=_logEntries.length;
-          _log('Mood scan running...',`${pct}%`);
+          _log('Mood scan running...',sub);
         }
       }else if(!s.running&&_moodWasRunning){
         if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
           _logEntries[_moodLogIdx].text='Mood scan batch complete';
-          _logEntries[_moodLogIdx].sub=null;
+          _logEntries[_moodLogIdx].sub=`${s.scanned??0}/${s.total??0} tracks scanned`;
           _renderLog();
           if(!_logLocked)_resetLogTimer();
         }
@@ -532,6 +538,42 @@ function pollMoodScan(){
   };
   check();
   _moodTimer=setInterval(check,15000);
+}
+
+async function triggerMoodScanFromConfig(){
+  const btn=$('#cfgMoodScanBtn');
+  const isRunning=btn.dataset.running==='true';
+  btn.disabled=true;
+  try{
+    if(isRunning){
+      await api('/mood/continuous',{method:'POST',body:JSON.stringify({action:'stop'})});
+      _setMoodScanBtn(false,null);
+    }else{
+      const r=await api('/mood/scan',{method:'POST'});
+      if(r.status==='complete'){
+        toast('All tracks already scanned','info');
+      }else if(r.status==='already_running'){
+        _setMoodScanBtn(true,null);
+      }else{
+        _setMoodScanBtn(true,null);
+      }
+    }
+    // Reset poller so it picks up new state immediately
+    _moodWasRunning=false;
+    _moodLogIdx=null;
+    if(_moodTimer)clearInterval(_moodTimer);
+    pollMoodScan();
+  }catch(e){toast(`Mood scan: ${e.message}`,'error')}
+  finally{btn.disabled=false}
+}
+
+function _setMoodScanBtn(running,remaining){
+  const btn=$('#cfgMoodScanBtn');
+  const lbl=$('#cfgMoodScanStatus');
+  if(!btn)return;
+  btn.dataset.running=running?'true':'false';
+  btn.textContent=running?'Stop':'Scan Now';
+  if(lbl)lbl.textContent=running?'Scanning…':remaining!=null?`Manual Scan (${remaining} remaining)`:'Manual Scan';
 }
 
 // --- Config modal ---
@@ -610,6 +652,11 @@ async function openConfig(){
   }catch(e){toast('Failed to load config','error');return}
   _syncMoodFields();
   _syncWatcherFields();
+  // Populate mood scan button state
+  try{
+    const ms=await api('/mood/status');
+    _setMoodScanBtn(ms.running,ms.running?null:ms.remaining);
+  }catch{}
   $('#cfgOverlay').classList.add('on');
 }
 

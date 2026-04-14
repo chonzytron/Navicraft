@@ -190,7 +190,6 @@ async function triggerScan(){
   try{
     _clearLog();
     await api('/scan',{method:'POST'});
-    toast('Scan started','info');
     pollScan();
   }catch(e){toast(e.message,'error')}
 }
@@ -454,6 +453,7 @@ function reset(){
 // --- Enrichment progress ---
 let _enrichWasIncomplete=false;
 let _enrichTimer=null;
+let _enrichLogIdx=null;
 
 function pollEnrichment(){
   if(_enrichTimer)clearInterval(_enrichTimer);
@@ -461,12 +461,33 @@ function pollEnrichment(){
     try{
       const s=await api('/popularity/status');
       const incomplete=s.remaining>0||s.deezer_missing>0||s.lastfm_missing>0||s.musicbrainz_missing>0;
+      const dzPct=Math.round(s.deezer_percent??0);
+      const lfPct=Math.round(s.lastfm_percent??0);
+      const mbPct=Math.round(s.musicbrainz_percent??0);
+      const sub=`Deezer: ${dzPct}% · Last.fm: ${lfPct}% · MBrainz: ${mbPct}%`;
       if(incomplete&&!_enrichWasIncomplete){
-        _log('Popularity enrichment in progress',`${s.remaining} tracks pending`);
+        _enrichLogIdx=_logEntries.length;
+        _log('Popularity enrichment in progress',sub);
         _enrichWasIncomplete=true;
+      }else if(incomplete&&_enrichWasIncomplete){
+        if(_enrichLogIdx!==null&&_logEntries[_enrichLogIdx]){
+          _logEntries[_enrichLogIdx].sub=sub;
+          _renderLog();
+        }else{
+          _enrichLogIdx=_logEntries.length;
+          _log('Popularity enrichment in progress',sub);
+        }
       }else if(!incomplete&&_enrichWasIncomplete){
-        _log('Popularity data up to date');
+        if(_enrichLogIdx!==null&&_logEntries[_enrichLogIdx]){
+          _logEntries[_enrichLogIdx].text='Popularity enrichment complete';
+          _logEntries[_enrichLogIdx].sub=sub;
+          _renderLog();
+          if(!_logLocked)_resetLogTimer();
+        }else{
+          _log('Popularity enrichment complete',sub);
+        }
         _enrichWasIncomplete=false;
+        _enrichLogIdx=null;
       }
     }catch{}
   };
@@ -477,18 +498,35 @@ function pollEnrichment(){
 // --- Mood scan progress ---
 let _moodWasRunning=false;
 let _moodTimer=null;
+let _moodLogIdx=null;
 
 function pollMoodScan(){
   if(_moodTimer)clearInterval(_moodTimer);
   const check=async()=>{
     try{
       const s=await api('/mood/status');
+      const pct=Math.round(s.percent??0);
       if(s.running&&!_moodWasRunning){
-        _log('Mood scan running...');
+        _moodLogIdx=_logEntries.length;
+        _log('Mood scan running...',`${pct}%`);
         _moodWasRunning=true;
+      }else if(s.running&&_moodWasRunning){
+        if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
+          _logEntries[_moodLogIdx].sub=`${pct}%`;
+          _renderLog();
+        }else{
+          _moodLogIdx=_logEntries.length;
+          _log('Mood scan running...',`${pct}%`);
+        }
       }else if(!s.running&&_moodWasRunning){
-        _log('Mood scan batch complete');
+        if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
+          _logEntries[_moodLogIdx].text='Mood scan batch complete';
+          _logEntries[_moodLogIdx].sub=null;
+          _renderLog();
+          if(!_logLocked)_resetLogTimer();
+        }
         _moodWasRunning=false;
+        _moodLogIdx=null;
       }
     }catch{}
   };

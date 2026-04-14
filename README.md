@@ -265,138 +265,6 @@ In **any** Subsonic-compatible client (Navidrome web UI, Feishin, Symfonium, Aon
 
 ---
 
-## Navidrome WASM Plugin (Advanced)
-
-For tighter in-server integration, NaviCraft includes a **Navidrome WASM plugin** boilerplate in the `navidrome-plugin/` directory. This plugin runs inside Navidrome itself (v0.60.0+) and delegates playlist generation to NaviCraft's backend API.
-
-> **Note:** The playlist watcher above handles the same use case without any plugin installation. The WASM plugin is an alternative for users who prefer in-server execution or want to extend it further. Both approaches work independently — use one or the other, not both.
-
-### Prerequisites
-
-- **Navidrome v0.60.0+** with the plugin system enabled (`Plugins.Enabled = true`)
-- **NaviCraft** running as a separate service (Docker container or standalone)
-- **TinyGo** installed for building the plugin (`brew install tinygo` / `apt install tinygo`)
-- **Go 1.22+** for dependency management
-
-### Building the plugin
-
-```bash
-cd navidrome-plugin/
-
-# Install Go dependencies
-go mod tidy
-
-# Build the WASM module
-tinygo build -o plugin.wasm -target wasip1 .
-
-# Package as .ndp file
-zip -j navicraft.ndp manifest.json plugin.wasm
-
-# Or use the Makefile shortcut:
-make package
-```
-
-This produces `navicraft.ndp` — the plugin package file.
-
-### Installing in Navidrome
-
-1. **Locate your Navidrome plugins folder.** By default this is `$DataFolder/Plugins` (e.g., `/data/Plugins` in Docker). You can customize it with the `Plugins.Folder` config option.
-
-2. **Copy the plugin:**
-   ```bash
-   # Docker example
-   docker cp navicraft.ndp navidrome:/data/Plugins/navicraft.ndp
-
-   # Or mount a host directory
-   cp navicraft.ndp /path/to/navidrome/data/Plugins/
-   ```
-
-3. **Restart Navidrome** (or enable `Plugins.AutoReload = true` for hot-loading):
-   ```bash
-   docker restart navidrome
-   ```
-
-4. **Configure the plugin** in Navidrome's web UI:
-   - Go to **Settings > Plugins** (admin only)
-   - Find "NaviCraft" in the plugin list
-   - Set the **NaviCraft URL** to your NaviCraft instance (e.g., `http://navicraft:8765` if on the same Docker network, or `http://192.168.1.100:8085` for host networking)
-   - Adjust the **Poll Interval** and **Default Song Count** if desired
-   - Enable the plugin
-
-5. **Verify the connection** — check Navidrome logs for:
-   ```
-   NaviCraft plugin initialized. Backend URL: http://navicraft:8765
-   NaviCraft backend connection verified
-   ```
-
-### Navidrome configuration options
-
-These go in your Navidrome config file (`navidrome.toml`) or environment:
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `Plugins.Enabled` | `true` | Enable the plugin system |
-| `Plugins.Folder` | `$DataFolder/Plugins` | Directory containing `.ndp` files |
-| `Plugins.AutoReload` | `false` | Auto-detect new/changed plugins without restart |
-| `Plugins.CacheSize` | `200MB` | Compiled WASM module cache size |
-
-### Plugin permissions
-
-The NaviCraft plugin requests these permissions (declared in `manifest.json`):
-
-| Permission | Reason |
-|------------|--------|
-| `http` | Communicate with NaviCraft backend API |
-| `cache` | Track in-flight generation requests |
-| `kvstore` | Persist generation history across restarts |
-| `scheduler` | Poll for new `[navicraft]` playlists |
-| `subsonicapi` | Read and update playlists |
-
-### Docker networking for plugin
-
-When both Navidrome and NaviCraft run as Docker containers, they need to communicate. Options:
-
-**Same Docker network (recommended):**
-```yaml
-# docker-compose.yml
-services:
-  navidrome:
-    # ... your existing navidrome config
-    networks:
-      - music
-
-  navicraft:
-    # ... your existing navicraft config
-    networks:
-      - music
-
-networks:
-  music:
-    driver: bridge
-```
-Then set the plugin's NaviCraft URL to `http://navicraft:8765`.
-
-**Host networking:**
-Use your machine's IP address: `http://192.168.1.100:8085`.
-
-### Extending the plugin
-
-The plugin source code in `navidrome-plugin/main.go` implements:
-
-| Export | Capability | Purpose |
-|--------|-----------|---------|
-| `nd_on_init` | LifecycleManagement | Validates NaviCraft connection on startup |
-| `nd_scheduler_callback` | SchedulerCallback | Polls for `[navicraft]` playlists and triggers generation |
-
-The host service wrappers (`getPlaylistsViaHost`, `updatePlaylistViaHost`) are placeholder implementations. Replace them with actual Navidrome plugin SDK host function calls based on your Navidrome version. See the [Navidrome plugin documentation](https://www.navidrome.org/docs/usage/features/plugins/) for the latest SDK reference.
-
-Potential extensions:
-- **MetadataAgent** — Expose NaviCraft's mood/popularity data to Navidrome's library view
-- **Lyrics** — Integrate with NaviCraft's metadata for richer track information
-- **TaskWorker** — Run generation as a background task with progress tracking
-
----
-
 ## Metadata Extracted
 
 NaviCraft reads tags directly from your files using `mutagen`:
@@ -431,11 +299,6 @@ navicraft/
 │   └── assets/
 │       ├── app.js           # Frontend logic
 │       └── styles.css       # Styles
-├── navidrome-plugin/
-│   ├── manifest.json        # Navidrome WASM plugin manifest
-│   ├── main.go              # Plugin source (Go/TinyGo)
-│   ├── go.mod               # Go module definition
-│   └── Makefile             # Build + package commands
 ├── unraid/
 │   ├── deploy-navicraft.sh  # Unraid User Script
 │   ├── my-navicraft.xml     # Unraid Docker template
@@ -473,7 +336,6 @@ navicraft/
 | POST | `/api/mood/reset` | Reset all mood/theme tags for re-scanning |
 | POST | `/api/mood/continuous` | Start/stop continuous mood scanning (play/pause) |
 | GET | `/api/watcher/status` | Playlist watcher status and generation history |
-| POST | `/api/plugin/generate` | Synchronous playlist generation for plugins (no SSE) |
 
 ### Generate request
 

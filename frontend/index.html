@@ -40,41 +40,6 @@
     </button>
   </header>
 
-  <!-- Scan Progress Bar -->
-  <div class="scan-bar" id="scanBar">
-    <div class="spinner"></div>
-    <span id="scanMsg">Scanning...</span>
-    <span class="scan-pct" id="scanPct"></span>
-  </div>
-
-  <!-- Enrichment Progress -->
-  <div class="enrich-bar" id="enrichBar">
-    <div class="enrich-row">
-      <span class="enrich-label">Deezer</span>
-      <div class="enrich-track"><div class="enrich-fill deezer" id="enrichFillDeezer"></div></div>
-      <span class="enrich-pct" id="enrichTextDeezer">0%</span>
-    </div>
-    <div class="enrich-row">
-      <span class="enrich-label">Last.fm</span>
-      <div class="enrich-track"><div class="enrich-fill lastfm" id="enrichFillLastfm"></div></div>
-      <span class="enrich-pct" id="enrichTextLastfm">0%</span>
-    </div>
-    <div class="enrich-row">
-      <span class="enrich-label">MBrainz</span>
-      <div class="enrich-track"><div class="enrich-fill musicbrainz" id="enrichFillMusicbrainz"></div></div>
-      <span class="enrich-pct" id="enrichTextMusicbrainz">0%</span>
-    </div>
-  </div>
-
-  <!-- Mood Scan Progress -->
-  <div class="enrich-bar" id="moodBar">
-    <div class="enrich-row">
-      <span class="enrich-label mood-label" id="moodLabel" onclick="toggleContinuousMood()" title="Click to start continuous scanning">Mood</span>
-      <div class="enrich-track"><div class="enrich-fill mood-scan" id="moodFill"></div></div>
-      <span class="enrich-pct" id="moodText">0%</span>
-    </div>
-  </div>
-
   <!-- Stats -->
   <div class="stats" id="stats" style="display:none">
     <div class="stat"><div class="stat-val" id="vSongs">&mdash;</div><div class="stat-lbl">Songs</div></div>
@@ -124,10 +89,7 @@
     </div>
   </div>
 
-  <!-- Scan Log -->
-  <div class="scan-log" id="scanLog" title="Tap to dismiss"></div>
-
-  <!-- Generation Process Log -->
+  <!-- Activity Log (scan · enrichment · mood · generation — all in one) -->
   <div class="scan-log" id="processLog"></div>
 
   <!-- Results -->

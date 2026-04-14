@@ -96,7 +96,7 @@ class Config:
 
     # Mood / theme tag scanning (Essentia + API)
     mood_scan_enabled: bool = False
-    mood_scan_batch_size: int = 50
+    mood_scan_batch_size: int = field(default_factory=lambda: int(os.getenv("MOOD_SCAN_BATCH_SIZE", "50")))
     mood_scan_from_hour: int = 0   # Schedule window start (0-23)
     mood_scan_to_hour: int = 6     # Schedule window end (0-23)
 
@@ -121,7 +121,7 @@ class Config:
         self.plex_token = _resolve("PLEX_TOKEN", "", overrides, "plex_token")
         self.ai_provider = _resolve("AI_PROVIDER", "claude", overrides, "ai_provider")
         self.claude_api_key = _resolve("CLAUDE_API_KEY", "", overrides, "claude_api_key")
-        self.claude_model = _resolve("CLAUDE_MODEL", "claude-3-5-sonnet-20241022", overrides, "claude_model")
+        self.claude_model = _resolve("CLAUDE_MODEL", "claude-sonnet-4-6", overrides, "claude_model")
         self.gemini_api_key = _resolve("GEMINI_API_KEY", "", overrides, "gemini_api_key")
         self.gemini_model = _resolve("GEMINI_MODEL", "gemini-2.5-flash", overrides, "gemini_model")
         self.lastfm_api_key = _resolve("LASTFM_API_KEY", "", overrides, "lastfm_api_key")

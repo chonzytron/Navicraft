@@ -7,6 +7,7 @@ and populates the SQLite index. Supports incremental scanning by mtime.
 import os
 import logging
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Callable
 import mutagen
@@ -312,7 +313,7 @@ def _scan_sync(full_scan: bool, progress_cb: ProgressCallback) -> dict:
 
         # Update scan log
         db.update_scan_log(conn, log_id,
-            finished_at="datetime('now')",
+            finished_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             tracks_scanned=scanned,
             tracks_added=added,
             tracks_updated=updated,

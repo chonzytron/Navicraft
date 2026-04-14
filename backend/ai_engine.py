@@ -38,9 +38,6 @@ def _strip_scores(tag_string: str) -> str:
 
 # --- Prompts ---
 
-PASS1_SYSTEM = None  # Built dynamically with mood vocabulary in pass1_extract_intent()
-
-
 def _build_pass1_system() -> str:
     """Build Pass 1 system prompt with the standardized mood/theme vocabulary."""
     from mood_scanner import MOOD_CATEGORY, THEME_CATEGORY

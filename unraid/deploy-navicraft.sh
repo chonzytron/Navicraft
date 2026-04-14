@@ -63,14 +63,13 @@ SOURCE_PATH="/mnt/user/appdata/navicraft/source"
 # PLEX_TOKEN=""
 # AI_PROVIDER="claude"
 # CLAUDE_API_KEY=""
-# CLAUDE_MODEL="claude-3-5-sonnet-20241022"
+# CLAUDE_MODEL="claude-sonnet-4-6"
 # GEMINI_API_KEY=""
 # GEMINI_MODEL="gemini-2.5-flash"
 # LASTFM_API_KEY=""
 # SCAN_INTERVAL_HOURS="6"
 # MOOD_SCAN_ENABLED="false"
 # MOOD_SCAN_BATCH_SIZE="50"
-# MOOD_SCAN_INTERVAL_HOURS="24"
 # NAVICRAFT_WATCHER_ENABLED="false"
 # NAVICRAFT_WATCHER_INTERVAL="30"
 
@@ -92,11 +91,7 @@ if docker inspect "$CONTAINER_NAME" &>/dev/null; then
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
 fi
 
-# Always pull the latest image (never reuse a cached version)
-echo "Pulling latest NaviCraft image..."
-docker pull "$DOCKER_IMAGE"
-
-# Build from source if requested (overrides the pulled image)
+# Build from source if requested, otherwise pull the latest image
 if [ "$BUILD_FROM_SOURCE" = "true" ]; then
     echo "Building NaviCraft from source at $SOURCE_PATH..."
     if [ ! -d "$SOURCE_PATH" ]; then
@@ -106,6 +101,10 @@ if [ "$BUILD_FROM_SOURCE" = "true" ]; then
     fi
     docker build --no-cache -t navicraft:latest "$SOURCE_PATH"
     DOCKER_IMAGE="navicraft:latest"
+else
+    # Always pull the latest image (never reuse a cached version)
+    echo "Pulling latest NaviCraft image..."
+    docker pull "$DOCKER_IMAGE"
 fi
 
 # Remove dangling images left behind by the pull/build above
@@ -138,7 +137,6 @@ OPTIONAL_ENVS=()
 [ -n "${SCAN_INTERVAL_HOURS:-}" ]  && OPTIONAL_ENVS+=(-e "SCAN_INTERVAL_HOURS=$SCAN_INTERVAL_HOURS")
 [ -n "${MOOD_SCAN_ENABLED:-}" ]   && OPTIONAL_ENVS+=(-e "MOOD_SCAN_ENABLED=$MOOD_SCAN_ENABLED")
 [ -n "${MOOD_SCAN_BATCH_SIZE:-}" ] && OPTIONAL_ENVS+=(-e "MOOD_SCAN_BATCH_SIZE=$MOOD_SCAN_BATCH_SIZE")
-[ -n "${MOOD_SCAN_INTERVAL_HOURS:-}" ] && OPTIONAL_ENVS+=(-e "MOOD_SCAN_INTERVAL_HOURS=$MOOD_SCAN_INTERVAL_HOURS")
 [ -n "${NAVICRAFT_WATCHER_ENABLED:-}" ] && OPTIONAL_ENVS+=(-e "NAVICRAFT_WATCHER_ENABLED=$NAVICRAFT_WATCHER_ENABLED")
 [ -n "${NAVICRAFT_WATCHER_INTERVAL:-}" ] && OPTIONAL_ENVS+=(-e "NAVICRAFT_WATCHER_INTERVAL=$NAVICRAFT_WATCHER_INTERVAL")
 

@@ -210,7 +210,10 @@ function pollScan(){
         else if(s.phase==='enriching') _log('Fetching popularity data...');
         else if(s.phase==='cleanup'||s.phase==='health_check') _log('Running health check & cleanup...');
         else if(s.phase==='idle'&&seenActive){
-          if(s.log&&s.log.length)s.log.forEach(e=>_log(e));
+          if(s.log&&s.log.length)s.log.forEach(e=>{
+            const m=e.match(/^(.*?)(\s*\([^)]+\))$/);
+            if(m)_log(m[1].trim(),m[2].trim());else _log(e);
+          });
           loadStats();
         }
       }

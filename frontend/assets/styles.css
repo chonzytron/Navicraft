@@ -95,6 +95,7 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .btn-primary:hover{transform:translateY(-1px)}
 .btn-ghost{background:transparent;color:var(--text-3);border:1px solid var(--border)}
 .btn-ghost:hover{border-color:var(--text-3);color:var(--text-2)}
+.btn-sm{padding:5px 12px;font-size:12px}
 
 #moodScheduleFields.disabled,#watcherFields.disabled{opacity:.35;pointer-events:none}
 .cfg-hint{font-size:.8rem;color:var(--text-4);margin:.25rem 0 0;line-height:1.4}

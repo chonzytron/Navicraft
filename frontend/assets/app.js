@@ -453,7 +453,26 @@ function reset(){
 // --- Enrichment progress ---
 let _enrichWasIncomplete=false;
 let _enrichTimer=null;
-let _enrichLogIdx=null;
+let _enrichLogEntry=null;
+
+function _upsertLogEntry(ref,text,sub){
+  // Find existing entry by identity so concurrent pollers can't stomp each
+  // other's slots when the log is cleared and re-populated out of order.
+  const idx=ref?_logEntries.indexOf(ref):-1;
+  if(idx>=0){
+    ref.text=text;
+    ref.sub=sub||null;
+    _renderLog();
+    if(!_logLocked)_resetLogTimer();
+    return ref;
+  }
+  const entry={text,sub:sub||null};
+  _logEntries.push(entry);
+  _renderLog();
+  $('#processLog').classList.add('on');
+  if(!_logLocked)_resetLogTimer();
+  return entry;
+}
 
 function pollEnrichment(){
   if(_enrichTimer)clearInterval(_enrichTimer);
@@ -465,29 +484,13 @@ function pollEnrichment(){
       const lfPct=Math.round(s.lastfm_percent??0);
       const mbPct=Math.round(s.musicbrainz_percent??0);
       const sub=`Deezer: ${dzPct}% · Last.fm: ${lfPct}% · MBrainz: ${mbPct}%`;
-      if(incomplete&&!_enrichWasIncomplete){
-        _enrichLogIdx=_logEntries.length;
-        _log('Popularity enrichment in progress',sub);
+      if(incomplete){
+        _enrichLogEntry=_upsertLogEntry(_enrichLogEntry,'Popularity enrichment in progress',sub);
         _enrichWasIncomplete=true;
-      }else if(incomplete&&_enrichWasIncomplete){
-        if(_enrichLogIdx!==null&&_logEntries[_enrichLogIdx]){
-          _logEntries[_enrichLogIdx].sub=sub;
-          _renderLog();
-        }else{
-          _enrichLogIdx=_logEntries.length;
-          _log('Popularity enrichment in progress',sub);
-        }
-      }else if(!incomplete&&_enrichWasIncomplete){
-        if(_enrichLogIdx!==null&&_logEntries[_enrichLogIdx]){
-          _logEntries[_enrichLogIdx].text='Popularity enrichment complete';
-          _logEntries[_enrichLogIdx].sub=sub;
-          _renderLog();
-          if(!_logLocked)_resetLogTimer();
-        }else{
-          _log('Popularity enrichment complete',sub);
-        }
+      }else if(_enrichWasIncomplete){
+        _enrichLogEntry=_upsertLogEntry(_enrichLogEntry,'Popularity enrichment complete',sub);
         _enrichWasIncomplete=false;
-        _enrichLogIdx=null;
+        _enrichLogEntry=null;
       }
     }catch{}
   };
@@ -496,9 +499,8 @@ function pollEnrichment(){
 }
 
 // --- Mood scan progress ---
-let _moodWasIncomplete=false;
 let _moodTimer=null;
-let _moodLogIdx=null;
+let _moodLogEntry=null;
 
 function _moodSub(s){
   const pct=Math.round(s.percent??0);
@@ -513,31 +515,11 @@ function pollMoodScan(){
       const s=await api('/mood/status');
       const total=s.total??0;
       const scanned=s.scanned??0;
-      const incomplete=total>0&&scanned<total;
+      if(total<=0)return;
+      const incomplete=scanned<total;
       const sub=_moodSub(s);
-      const text=s.running?'Mood scan running...':'Mood enrichment in progress';
-      if(incomplete){
-        if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
-          _logEntries[_moodLogIdx].text=text;
-          _logEntries[_moodLogIdx].sub=sub;
-          _renderLog();
-        }else{
-          _moodLogIdx=_logEntries.length;
-          _log(text,sub);
-        }
-        _moodWasIncomplete=true;
-      }else if(_moodWasIncomplete){
-        if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
-          _logEntries[_moodLogIdx].text='Mood enrichment complete';
-          _logEntries[_moodLogIdx].sub=`${scanned}/${total} tracks scanned`;
-          _renderLog();
-          if(!_logLocked)_resetLogTimer();
-        }else{
-          _log('Mood enrichment complete',`${scanned}/${total} tracks scanned`);
-        }
-        _moodWasIncomplete=false;
-        _moodLogIdx=null;
-      }
+      const text=s.running?'Mood scan running...':(incomplete?'Mood enrichment in progress':'Mood enrichment complete');
+      _moodLogEntry=_upsertLogEntry(_moodLogEntry,text,sub);
     }catch{}
   };
   check();
@@ -563,8 +545,7 @@ async function triggerMoodScanFromConfig(){
       }
     }
     // Reset poller so it picks up new state immediately
-    _moodWasIncomplete=false;
-    _moodLogIdx=null;
+    _moodLogEntry=null;
     if(_moodTimer)clearInterval(_moodTimer);
     pollMoodScan();
   }catch(e){toast(`Mood scan: ${e.message}`,'error')}

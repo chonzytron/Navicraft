@@ -58,6 +58,21 @@ def _resolve(env_key: str, default: str, overrides: dict, field_name: str) -> st
     return os.getenv(env_key, default)
 
 
+def _env_int(env_key: str, default: int) -> int:
+    """Read an int from env, falling back to ``default`` on missing/blank/bad values.
+
+    Unraid's docker-template UI passes ``-e VAR=""`` for every blank advanced
+    field, so ``int(os.getenv(...))`` must not explode on empty strings.
+    """
+    raw = os.getenv(env_key)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return default
+
+
 @dataclass
 class Config:
     # Music library path (mounted volume)
@@ -96,7 +111,7 @@ class Config:
 
     # Mood / theme tag scanning (Essentia + API)
     mood_scan_enabled: bool = False
-    mood_scan_batch_size: int = field(default_factory=lambda: int(os.getenv("MOOD_SCAN_BATCH_SIZE", "50")))
+    mood_scan_batch_size: int = field(default_factory=lambda: _env_int("MOOD_SCAN_BATCH_SIZE", 50))
     mood_scan_from_hour: int = 0   # Schedule window start (0-23)
     mood_scan_to_hour: int = 6     # Schedule window end (0-23)
 
@@ -105,7 +120,7 @@ class Config:
     navicraft_watcher_interval: int = 30  # seconds between polls
 
     # AI settings
-    max_candidates: int = field(default_factory=lambda: int(os.getenv("MAX_CANDIDATES", "500")))
+    max_candidates: int = field(default_factory=lambda: _env_int("MAX_CANDIDATES", 500))
 
     @property
     def extensions_set(self) -> set:

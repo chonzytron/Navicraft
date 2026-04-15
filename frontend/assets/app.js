@@ -473,6 +473,7 @@ function pollEnrichment(){
         if(_enrichLogIdx!==null&&_logEntries[_enrichLogIdx]){
           _logEntries[_enrichLogIdx].sub=sub;
           _renderLog();
+          if(!_logLocked)_resetLogTimer();
         }else{
           _enrichLogIdx=_logEntries.length;
           _log('Popularity enrichment in progress',sub);
@@ -521,6 +522,7 @@ function pollMoodScan(){
           _logEntries[_moodLogIdx].text=text;
           _logEntries[_moodLogIdx].sub=sub;
           _renderLog();
+          if(!_logLocked)_resetLogTimer();
         }else{
           _moodLogIdx=_logEntries.length;
           _log(text,sub);

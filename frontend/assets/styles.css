@@ -98,8 +98,11 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .btn-sm{padding:5px 12px;font-size:12px}
 
 #moodScheduleFields.disabled,#watcherFields.disabled{opacity:.35;pointer-events:none}
-.cfg-hint{font-size:.8rem;color:var(--text-4);margin:.25rem 0 0;line-height:1.4}
+.cfg-hint{font-size:.8rem;color:var(--text-4);margin:.25rem 0 10px;line-height:1.4}
 .cfg-hint code{background:rgba(255,255,255,.08);padding:.1em .35em;border-radius:3px;font-size:.78rem}
+.cfg-label-with-info{display:inline-flex;align-items:center;gap:6px}
+.cfg-info-btn{width:16px;height:16px;border-radius:50%;border:1px solid var(--border-hover);background:transparent;color:var(--text-4);font-family:var(--mono);font-size:10px;line-height:1;cursor:pointer;padding:0;display:inline-grid;place-items:center;transition:color .15s,border-color .15s}
+.cfg-info-btn:hover,.cfg-info-btn[aria-expanded=true]{color:var(--text-2);border-color:var(--text-3)}
 
 /* --- Media server status --- */
 .srv-status{display:flex;align-items:center;gap:12px;padding-left:54px}

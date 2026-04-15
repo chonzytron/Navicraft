@@ -137,8 +137,9 @@ header{display:flex;align-items:flex-start;justify-content:space-between;margin-
 .cfg-btn:hover{color:var(--text);border-color:var(--border-hover);transform:rotate(30deg)}
 
 /* --- Config modal --- */
-.cfg-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;place-items:center;backdrop-filter:blur(4px)}
-.cfg-overlay.on{display:grid}
+.cfg-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(4px)}
+.cfg-overlay.on{display:flex}
+body.modal-open{overflow:hidden}
 .cfg-modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:90%;max-width:480px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 24px 64px #000a}
 .cfg-header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border)}
 .cfg-header h2{font-size:16px;font-weight:600}

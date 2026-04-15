@@ -658,10 +658,12 @@ async function openConfig(){
     _setMoodScanBtn(ms.running,ms.running?null:ms.remaining);
   }catch{}
   $('#cfgOverlay').classList.add('on');
+  document.body.classList.add('modal-open');
 }
 
 function closeConfig(){
   $('#cfgOverlay').classList.remove('on');
+  document.body.classList.remove('modal-open');
 }
 
 async function saveConfig(){

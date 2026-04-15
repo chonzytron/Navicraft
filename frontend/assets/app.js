@@ -505,7 +505,10 @@ let _moodLogEntry=null;
 function _moodSub(s){
   const pct=Math.round(s.percent??0);
   const overall=`${pct}% (${s.scanned??0}/${s.total??0} tracks)`;
-  return s.batch_total>0?`${overall} · batch ${s.batch_current}/${s.batch_total}`:overall;
+  // Only include "batch X/Y" while a batch is actively running — otherwise the
+  // backend leaves stale values from the last completed batch, which makes an
+  // idle/paused state look active.
+  return (s.running&&s.batch_total>0)?`${overall} · batch ${s.batch_current}/${s.batch_total}`:overall;
 }
 
 function pollMoodScan(){

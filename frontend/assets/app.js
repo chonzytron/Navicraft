@@ -517,8 +517,20 @@ function pollMoodScan(){
       const scanned=s.scanned??0;
       if(total<=0)return;
       const incomplete=scanned<total;
+      const pct=Math.round(s.percent??0);
       const sub=_moodSub(s);
-      const text=s.running?'Mood scan running...':(incomplete?'Mood enrichment in progress':'Mood enrichment complete');
+      let text;
+      if(s.running){
+        // A batch is actively processing (manual trigger, continuous, or scheduled).
+        text='Mood enrichment in progress';
+      }else if(incomplete){
+        // Not running right now. Distinguish "waiting to resume" from "paused".
+        // continuous=user started play; enabled=scheduled window is armed.
+        const waiting=s.continuous||s.enabled;
+        text=`Mood enrichment ${waiting?'on standby':'paused'} — ${pct}%`;
+      }else{
+        text='Mood enrichment complete';
+      }
       _moodLogEntry=_upsertLogEntry(_moodLogEntry,text,sub);
     }catch{}
   };

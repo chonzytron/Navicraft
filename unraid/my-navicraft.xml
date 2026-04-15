@@ -13,7 +13,7 @@
   <Project>https://github.com/chonzytron/navicraft</Project>
   <Overview>NaviCraft is an AI-powered playlist generator for Navidrome and Plex/Plexamp. It scans your local music library, builds a metadata index, and uses AI (Claude or Gemini) to generate playlists from free-form text prompts like "chill jazz for a rainy evening" or "high energy workout mix". Supports both Navidrome and Plex as playlist targets — configure one or both. Most settings (servers, AI keys, etc.) can be configured from the Settings gear icon in the web UI after first launch.</Overview>
   <Category>MediaApp:Music</Category>
-  <Icon>https://raw.githubusercontent.com/chonzytron/navicraft/main/frontend/assets/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/chonzytron/navicraft/main/frontend/assets/favicon.svg</Icon>
   <Description>NaviCraft - AI-powered playlist generator for Navidrome and Plex/Plexamp. Scans your music library and uses AI to create playlists from natural language prompts.</Description>
   <WebUI>http://[IP]:[PORT:8085]</WebUI>
   <ExtraParams>--restart=unless-stopped</ExtraParams>
@@ -141,7 +141,7 @@
     Name="Claude Model"
     Target="CLAUDE_MODEL"
     Default=""
-    Description="Optional initial default. Configurable from Settings in the web UI. Default: claude-3-5-sonnet-20241022"
+    Description="Optional initial default. Configurable from Settings in the web UI. Default: claude-sonnet-4-6"
     Type="Variable"
     Display="advanced"
     Required="false"
@@ -218,16 +218,6 @@
     Target="MOOD_SCAN_BATCH_SIZE"
     Default=""
     Description="Optional initial default. Configurable from Settings in the web UI. Number of tracks to process per mood scan run. Default: 50"
-    Type="Variable"
-    Display="advanced"
-    Required="false"
-    Mask="false"></Config>
-
-  <Config
-    Name="Mood Scan Interval (hours)"
-    Target="MOOD_SCAN_INTERVAL_HOURS"
-    Default=""
-    Description="Optional initial default. Configurable from Settings in the web UI. Hours to wait between mood scan batches (timer starts after batch completes). Default: 24"
     Type="Variable"
     Display="advanced"
     Required="false"

@@ -708,6 +708,18 @@ async function saveConfig(){
   }catch(e){toast(`Save failed: ${e.message}`,'error')}
 }
 
+// Theme toggle (dark is default; light preference persists in localStorage)
+function toggleTheme(){
+  const isLight=document.documentElement.getAttribute('data-theme')==='light';
+  if(isLight){
+    document.documentElement.removeAttribute('data-theme');
+    try{localStorage.setItem('navicraft-theme','dark')}catch(e){}
+  }else{
+    document.documentElement.setAttribute('data-theme','light');
+    try{localStorage.setItem('navicraft-theme','light')}catch(e){}
+  }
+}
+
 // Close modal on Escape
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeConfig()});
 

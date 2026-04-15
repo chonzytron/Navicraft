@@ -183,15 +183,42 @@ function _resetLogTimer(){
   _logAutoHideTimer=setTimeout(()=>{_clearLog();_logAutoHideTimer=null;},30000);
 }
 
+// Called when a foreground process (scan, generate) finishes. Keeps the log
+// locked so background pollers (mood/popularity) stay out of the way, shows
+// the completion entries until the user clicks the log OR 30s pass — then
+// clears the log and lets pollers resume on their next tick.
+function _armCompletionCooldown(){
+  const el=$('#processLog');
+  if(!el||!el.classList.contains('on')){
+    _logLocked=false;
+    return;
+  }
+  // Stay locked: this suppresses poller upserts during the cooldown window.
+  _logLocked=true;
+  if(_logAutoHideTimer)clearTimeout(_logAutoHideTimer);
+  _logAutoHideTimer=setTimeout(()=>{_clearLog();_logAutoHideTimer=null;},30000);
+  // Small delay so a stray click from the completing action doesn't dismiss
+  // the log before the user sees it.
+  setTimeout(()=>{
+    if(!el.classList.contains('on'))return;
+    el.onclick=_clearLog;
+    el.classList.add('clickable');
+  },500);
+}
+
 // --- Scan ---
 let _lastScanPhase=null;
 
 async function triggerScan(){
   try{
     _clearLog();
+    _logLocked=true; // suppress pollers while scan runs
     await api('/scan',{method:'POST'});
     pollScan();
-  }catch(e){toast(e.message,'error')}
+  }catch(e){
+    _logLocked=false;
+    toast(e.message,'error');
+  }
 }
 
 function pollScan(){
@@ -214,15 +241,23 @@ function pollScan(){
             if(m)_log(m[1].trim(),m[2].trim());else _log(e);
           });
           loadStats();
+          _armCompletionCooldown();
         }
       }
       if(s.phase==='idle'&&(seenActive||!s.scanning)){
         clearInterval(scanPollTimer);
         scanPollTimer=null;
+        if(!seenActive)_logLocked=false; // no-op scan: release the lock
       }
     }catch{}
   },1500);
-  setTimeout(()=>{if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null}},600000);
+  setTimeout(()=>{
+    if(scanPollTimer){
+      clearInterval(scanPollTimer);
+      scanPollTimer=null;
+      _logLocked=false; // safety unlock if scan never reported completion
+    }
+  },600000);
 }
 
 // --- Generate (SSE streaming) ---
@@ -368,12 +403,10 @@ async function generate(){
     toast(e.message,'error');
   }finally{
     $('#genBtn').disabled=false;
-    _logLocked=false;
-    // Allow the user to click to dismiss once generation has finished
-    const el=$('#processLog');
-    if(el.classList.contains('on')){
-      setTimeout(()=>{ el.onclick=_clearLog; el.classList.add('clickable'); },500);
-    }
+    // Keep the log locked through the 30s cooldown so background pollers
+    // (mood/popularity) don't overwrite the completion entries; clears on
+    // click or auto-timeout, then pollers resume on their next tick.
+    _armCompletionCooldown();
   }
 }
 
@@ -456,6 +489,11 @@ let _enrichTimer=null;
 let _enrichLogEntry=null;
 
 function _upsertLogEntry(ref,text,sub){
+  // While a foreground process is running (or in its post-completion cooldown),
+  // keep background pollers out of the log. Caller can still track its own
+  // state; we just don't render or push an entry. A stale ref is fine — on
+  // the next tick after unlock we'll re-create the entry via the idx<0 path.
+  if(_logLocked)return ref;
   // Find existing entry by identity so concurrent pollers can't stomp each
   // other's slots when the log is cleared and re-populated out of order.
   const idx=ref?_logEntries.indexOf(ref):-1;
@@ -463,14 +501,14 @@ function _upsertLogEntry(ref,text,sub){
     ref.text=text;
     ref.sub=sub||null;
     _renderLog();
-    if(!_logLocked)_resetLogTimer();
+    _resetLogTimer();
     return ref;
   }
   const entry={text,sub:sub||null};
   _logEntries.push(entry);
   _renderLog();
   $('#processLog').classList.add('on');
-  if(!_logLocked)_resetLogTimer();
+  _resetLogTimer();
   return entry;
 }
 

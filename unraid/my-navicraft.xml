@@ -141,7 +141,7 @@
     Name="Claude Model"
     Target="CLAUDE_MODEL"
     Default=""
-    Description="Optional initial default. Configurable from Settings in the web UI. Default: claude-3-5-sonnet-20241022"
+    Description="Optional initial default. Configurable from Settings in the web UI. Default: claude-sonnet-4-6"
     Type="Variable"
     Display="advanced"
     Required="false"
@@ -218,16 +218,6 @@
     Target="MOOD_SCAN_BATCH_SIZE"
     Default=""
     Description="Optional initial default. Configurable from Settings in the web UI. Number of tracks to process per mood scan run. Default: 50"
-    Type="Variable"
-    Display="advanced"
-    Required="false"
-    Mask="false"></Config>
-
-  <Config
-    Name="Mood Scan Interval (hours)"
-    Target="MOOD_SCAN_INTERVAL_HOURS"
-    Default=""
-    Description="Optional initial default. Configurable from Settings in the web UI. Hours to wait between mood scan batches (timer starts after batch completes). Default: 24"
     Type="Variable"
     Display="advanced"
     Required="false"

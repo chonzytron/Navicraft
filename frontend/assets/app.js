@@ -496,7 +496,7 @@ function pollEnrichment(){
 }
 
 // --- Mood scan progress ---
-let _moodWasRunning=false;
+let _moodWasIncomplete=false;
 let _moodTimer=null;
 let _moodLogIdx=null;
 
@@ -511,27 +511,31 @@ function pollMoodScan(){
   const check=async()=>{
     try{
       const s=await api('/mood/status');
+      const total=s.total??0;
+      const scanned=s.scanned??0;
+      const incomplete=total>0&&scanned<total;
       const sub=_moodSub(s);
-      if(s.running&&!_moodWasRunning){
-        _moodLogIdx=_logEntries.length;
-        _log('Mood scan running...',sub);
-        _moodWasRunning=true;
-      }else if(s.running&&_moodWasRunning){
+      const text=s.running?'Mood scan running...':'Mood enrichment in progress';
+      if(incomplete){
         if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
+          _logEntries[_moodLogIdx].text=text;
           _logEntries[_moodLogIdx].sub=sub;
           _renderLog();
         }else{
           _moodLogIdx=_logEntries.length;
-          _log('Mood scan running...',sub);
+          _log(text,sub);
         }
-      }else if(!s.running&&_moodWasRunning){
+        _moodWasIncomplete=true;
+      }else if(_moodWasIncomplete){
         if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
-          _logEntries[_moodLogIdx].text='Mood scan batch complete';
-          _logEntries[_moodLogIdx].sub=`${s.scanned??0}/${s.total??0} tracks scanned`;
+          _logEntries[_moodLogIdx].text='Mood enrichment complete';
+          _logEntries[_moodLogIdx].sub=`${scanned}/${total} tracks scanned`;
           _renderLog();
           if(!_logLocked)_resetLogTimer();
+        }else{
+          _log('Mood enrichment complete',`${scanned}/${total} tracks scanned`);
         }
-        _moodWasRunning=false;
+        _moodWasIncomplete=false;
         _moodLogIdx=null;
       }
     }catch{}
@@ -559,7 +563,7 @@ async function triggerMoodScanFromConfig(){
       }
     }
     // Reset poller so it picks up new state immediately
-    _moodWasRunning=false;
+    _moodWasIncomplete=false;
     _moodLogIdx=null;
     if(_moodTimer)clearInterval(_moodTimer);
     pollMoodScan();
@@ -629,6 +633,16 @@ function _syncWatcherFields(){
   $('#watcherFields').classList.toggle('disabled',!on);
 }
 
+function toggleWatcherHelp(e){
+  e.preventDefault();
+  e.stopPropagation();
+  const help=$('#watcherHelp');
+  const btn=e.currentTarget;
+  const open=help.hasAttribute('hidden');
+  if(open){help.removeAttribute('hidden');btn.setAttribute('aria-expanded','true')}
+  else{help.setAttribute('hidden','');btn.setAttribute('aria-expanded','false')}
+}
+
 async function openConfig(){
   _populateHourSelects();
   try{
@@ -658,10 +672,12 @@ async function openConfig(){
     _setMoodScanBtn(ms.running,ms.running?null:ms.remaining);
   }catch{}
   $('#cfgOverlay').classList.add('on');
+  document.body.classList.add('modal-open');
 }
 
 function closeConfig(){
   $('#cfgOverlay').classList.remove('on');
+  document.body.classList.remove('modal-open');
 }
 
 async function saveConfig(){

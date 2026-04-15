@@ -497,7 +497,6 @@ function pollEnrichment(){
 }
 
 // --- Mood scan progress ---
-let _moodWasIncomplete=false;
 let _moodTimer=null;
 let _moodLogIdx=null;
 
@@ -514,31 +513,18 @@ function pollMoodScan(){
       const s=await api('/mood/status');
       const total=s.total??0;
       const scanned=s.scanned??0;
-      const incomplete=total>0&&scanned<total;
+      if(total<=0)return;
+      const incomplete=scanned<total;
       const sub=_moodSub(s);
-      const text=s.running?'Mood scan running...':'Mood enrichment in progress';
-      if(incomplete){
-        if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
-          _logEntries[_moodLogIdx].text=text;
-          _logEntries[_moodLogIdx].sub=sub;
-          _renderLog();
-          if(!_logLocked)_resetLogTimer();
-        }else{
-          _moodLogIdx=_logEntries.length;
-          _log(text,sub);
-        }
-        _moodWasIncomplete=true;
-      }else if(_moodWasIncomplete){
-        if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
-          _logEntries[_moodLogIdx].text='Mood enrichment complete';
-          _logEntries[_moodLogIdx].sub=`${scanned}/${total} tracks scanned`;
-          _renderLog();
-          if(!_logLocked)_resetLogTimer();
-        }else{
-          _log('Mood enrichment complete',`${scanned}/${total} tracks scanned`);
-        }
-        _moodWasIncomplete=false;
-        _moodLogIdx=null;
+      const text=s.running?'Mood scan running...':(incomplete?'Mood enrichment in progress':'Mood enrichment complete');
+      if(_moodLogIdx!==null&&_logEntries[_moodLogIdx]){
+        _logEntries[_moodLogIdx].text=text;
+        _logEntries[_moodLogIdx].sub=sub;
+        _renderLog();
+        if(!_logLocked)_resetLogTimer();
+      }else{
+        _moodLogIdx=_logEntries.length;
+        _log(text,sub);
       }
     }catch{}
   };
@@ -565,7 +551,6 @@ async function triggerMoodScanFromConfig(){
       }
     }
     // Reset poller so it picks up new state immediately
-    _moodWasIncomplete=false;
     _moodLogIdx=null;
     if(_moodTimer)clearInterval(_moodTimer);
     pollMoodScan();

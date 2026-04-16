@@ -686,10 +686,6 @@ async function openConfig(){
       const el=$('#'+elId);
       if(el)el.value=cfg[key]||'';
     }
-    for(const[key,elId]of Object.entries(cfgNumberMap)){
-      const el=$('#'+elId);
-      if(el)el.value=cfg[key]||'';
-    }
     for(const[key,elId]of Object.entries(cfgToggleMap)){
       const el=$('#'+elId);
       if(el)el.classList.toggle('on',cfg[key]==='true');
@@ -718,10 +714,6 @@ async function saveConfig(){
     if(el)body[key]=el.value;
   }
   for(const[key,elId]of Object.entries(cfgSelectMap)){
-    const el=$('#'+elId);
-    if(el)body[key]=el.value;
-  }
-  for(const[key,elId]of Object.entries(cfgNumberMap)){
     const el=$('#'+elId);
     if(el)body[key]=el.value;
   }

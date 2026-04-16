@@ -622,21 +622,18 @@ const cfgFieldMap={
   plex_url:'cfgPlexUrl',
   plex_token:'cfgPlexToken',
   claude_api_key:'cfgClaudeApiKey',
-  claude_model:'cfgClaudeModel',
   gemini_api_key:'cfgGeminiApiKey',
-  gemini_model:'cfgGeminiModel',
   lastfm_api_key:'cfgLastfmApiKey',
   scan_interval_hours:'cfgScanIntervalHours',
+  navicraft_watcher_interval:'cfgWatcherInterval',
 };
 // Select-based fields (use .value like inputs but are <select> elements)
 const cfgSelectMap={
   timezone:'cfgTimezone',
+  claude_model:'cfgClaudeModel',
+  gemini_model:'cfgGeminiModel',
   mood_scan_from_hour:'cfgMoodScanFromHour',
   mood_scan_to_hour:'cfgMoodScanToHour',
-};
-// Numeric input fields (not text, use .value)
-const cfgNumberMap={
-  navicraft_watcher_interval:'cfgWatcherInterval',
 };
 // Toggle fields need special handling (not text inputs)
 const cfgToggleMap={

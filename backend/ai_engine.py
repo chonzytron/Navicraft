@@ -52,6 +52,7 @@ Rules:
 - years: null if unconstrained. Refers to ORIGINAL release year, not reissues.
 - moods: ONLY from this vocabulary (unrecognized terms match nothing): {vocab}
   IMPORTANT: only set moods when the prompt clearly expresses a mood or emotional context. If the prompt does NOT convey any mood or vibe information, return moods as an empty list. Do NOT infer or guess moods that aren't supported by the prompt.
+  PREFER moods shown in the "Library moods:" / "Library themes:" lines when provided — those are the tags that actually exist in the user's library (format is "tag(count)"). Picking a mood with zero library coverage yields no results, so pick the closest covered synonym (e.g. "chill" → prefer covered "calm" or "relaxing"). If neither the requested mood nor a close synonym has coverage, leave moods empty and rely on genres/bpm/keywords to carry the intent.
 - bpm: set range if tempo matters (workout/gym=120-160, chill=60-100). null otherwise.
 - keywords: terms for song titles, comments, or album names.
 - exclude_*: for "NOT"/"no"/"without" exclusions.
@@ -71,11 +72,12 @@ Rules:
 - Order for flow: energy arc, tempo, transitions. Mix artists.
 - GENRE FIDELITY IS CRITICAL: every song you pick MUST fit the genres/mood/context described in the prompt. When "Search filters" are provided, cross-check each candidate's genre column against those target genres — a candidate whose genre doesn't overlap with the search filters is almost certainly a bad pick. A popular song that doesn't match the requested genre is a bad pick — skip it regardless of popularity. For example, if the prompt asks for "electronic and hip-hop for the gym", do not include rock, pop, indie, or other off-genre songs even if they are popular.
 - SELECTION WEIGHTING: determine from the prompt which dimensions matter most and weight your selection accordingly:
-  - Popularity (the pop column) is always an important factor — prefer popular songs over obscure ones when both fit the prompt. It is NOT just a tiebreaker.
+  - Popularity (the pop column) is an important factor when the prompt asks for well-known music — but it is NOT a license to pick only the most popular tracks in the pool. The candidate pool has been pre-balanced across popularity tiers specifically so you can build a varied playlist.
   - Genre and artist constraints are hard filters — never violate them.
-  - Mood, when present in the search filters, is an additional narrowing filter — strongly prefer songs whose tags match the requested mood, but do not ignore popularity in favour of a slightly better mood match.
+  - Mood, when present in the search filters, is an additional narrowing filter — strongly prefer songs whose tags match the requested mood; the candidate pool has already been re-ranked to surface high-confidence mood matches, so a low mood match with high popularity is usually a worse pick than a mid-popularity track with strong mood fit.
   - The prompt itself tells you what to prioritise. "Top hits by X" = popularity-heavy. "Chill jazz for studying" = mood/vibe-heavy. "90s hip hop" = genre+era. Use your judgement.
-- DISCOVERY: for genre-based or broad requests (multiple artists in the candidate pool), include a healthy mix of well-known and lesser-known artists (~30% lesser-known) to keep playlists interesting. A great track from a niche artist that fits the vibe perfectly is a good pick. For single-artist requests, this does not apply — just pick that artist's best songs.
+- DISCOVERY AND VARIETY: when no specific artist is named in the prompt, the candidate pool deliberately contains a mix of popular, mid-tier, and niche tracks. Build the playlist to reflect that mix — roughly 40-50% of picks should come from the popular/well-known tier, 30-40% from the mid tier, and 15-25% from the niche/lesser-known tier. This keeps the playlist interesting and surfaces library-specific gems instead of only hitting the same chart-topping songs. A great niche track that fits the vibe perfectly is a strong pick even when more popular alternatives exist. For artist-specific prompts ("best of X", "Radiohead only", etc.) this guidance does NOT apply — rank that artist's songs by popularity and vibe fit.
+- ARTIST DIVERSITY: when no artist is specified, spread picks across many different artists. Avoid stacking the same artist more than 2-3 times unless the candidate pool is small.
 - POPULARITY MODE: when search filters include "popularity_mode: true", popularity is the PRIMARY selection criterion. Pick the most popular songs first. For genre or decade requests, still maintain some artist diversity. For single-artist requests, simply rank by popularity. Mood matching does not apply in this mode.
 - Match the vibe/energy/context of the prompt (e.g. "gym" = high energy, driving beats).
 """
@@ -215,17 +217,37 @@ async def _call_ai(system: str, user_message: str, provider: str | None = None) 
         raise ValueError(f"Unknown AI provider: {provider}")
 
 
+def _format_tag_coverage(tag_summary: list[dict], limit: int = 20) -> str:
+    """Render a compact 'tag(count)' list for Pass 1.
+    Only tags with meaningful coverage are useful — showing tags the library
+    doesn't actually have just wastes tokens and tempts the AI to filter on
+    them (producing empty candidate sets)."""
+    if not tag_summary:
+        return ""
+    parts = [f"{t['tag']}({t['count']})" for t in tag_summary[:limit] if t.get("count", 0) > 0]
+    return ", ".join(parts)
+
+
 async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str | None = None) -> dict:
     """
     Pass 1: Extract search filters from the user's prompt.
-    library_summary should contain: genres, top_artists, year_range, mood_tags, theme_tags
+    library_summary should contain: genres, top_artists, year_range, mood_tags, theme_tags.
+
+    Mood/theme coverage is passed to the AI so it only selects mood terms that
+    actually exist in the library (otherwise the filter matches nothing and the
+    generator falls back to broader, less relevant candidates).
     """
     system = _build_pass1_system()
+
+    mood_coverage = _format_tag_coverage(library_summary.get("mood_tags") or [], limit=20)
+    theme_coverage = _format_tag_coverage(library_summary.get("theme_tags") or [], limit=20)
+    mood_line = f"Library moods: {mood_coverage}\n" if mood_coverage else ""
+    theme_line = f"Library themes: {theme_coverage}\n" if theme_coverage else ""
 
     user_msg = f"""Library: {library_summary.get('song_count', 0)} songs, {library_summary.get('artist_count', 0)} artists, years {library_summary.get('year_range', {}).get('min_year', '?')}-{library_summary.get('year_range', {}).get('max_year', '?')}
 Genres: {', '.join(library_summary.get('genres', [])[:60])}
 Artists: {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:40])}
-
+{mood_line}{theme_line}
 Prompt: "{prompt}"
 """
 

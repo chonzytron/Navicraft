@@ -104,14 +104,13 @@ Most settings can be configured from the **Settings gear icon** in the web UI. T
 | Plex Token | — | Plex authentication token ([how to find](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
 | AI Provider | `claude` | Default AI provider: `claude` or `gemini` |
 | Claude API Key | — | Anthropic API key (requires separate API billing) |
-| Claude Model | `claude-3-5-sonnet-20241022` | Claude model identifier |
+| Claude Model | `claude-sonnet-4-6` | Claude model identifier |
 | Gemini API Key | — | Google AI API key |
 | Gemini Model | `gemini-2.5-flash` | Gemini model identifier |
 | Last.fm API Key | — | Last.fm API key ([free](https://www.last.fm/api/account/create)) — improves popularity |
 | Scan Interval | `6` hours | Background scan interval |
 | Timezone | `UTC` | IANA timezone for schedule window (e.g. `America/New_York`) |
 | Mood Scan Enabled | `false` | Enable Essentia-based mood/theme tagging |
-| Mood Scan Batch Size | `50` | Number of tracks to process per mood scan run |
 | Mood Scan From Hour | `0` (midnight) | Schedule window start hour (0–23) |
 | Mood Scan To Hour | `6` (6 AM) | Schedule window end hour (0–23) |
 | Playlist Watcher Enabled | `false` | Enable Navidrome `[navicraft]` playlist detection |
@@ -126,6 +125,7 @@ These can also be set via env vars for initial bootstrap — the UI config overr
 | `MUSIC_DIR` | `/music` | Music directory inside the container |
 | `SCAN_EXTENSIONS` | `.mp3,.flac,.ogg,.opus,.m4a,.wma,.aac,.wav,.aiff,.ape,.wv,.mpc` | File types to index |
 | `MAX_CANDIDATES` | `500` | Max songs passed to AI Pass 2 |
+| `MOOD_SCAN_BATCH_SIZE` | `50` | Number of tracks processed per mood scan run |
 | `DB_PATH` | `/data/navicraft.db` | SQLite database path |
 
 ### Docker Compose host variables
@@ -177,7 +177,7 @@ pip install --pre essentia-tensorflow==2.1b6.dev1389
 
 **How it works:**
 - Enable in Settings under "Mood / Theme Tagging"
-- Configure batch size and a schedule window (from/to hour in your timezone)
+- Configure a schedule window (from/to hour in your timezone); tune batch size with the `MOOD_SCAN_BATCH_SIZE` env var if needed
 - Within the window (e.g. midnight–6 AM), batches run back-to-back automatically
 - Use the play/pause button on the mood progress bar to run continuously outside the window
 - On first run, Essentia models (~80MB) are downloaded automatically from `essentia.upf.edu`

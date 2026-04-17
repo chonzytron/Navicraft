@@ -378,6 +378,17 @@ def _mood_match_score(track: dict, mood_set: set[str]) -> float:
     return total
 
 
+def _bucket_of(popularity: int | None) -> str:
+    """Classify a popularity score into its bucket name."""
+    if popularity is None:
+        return "niche"
+    if popularity >= _BUCKET_TOP:
+        return "top"
+    if popularity >= _BUCKET_MID:
+        return "mid"
+    return "niche"
+
+
 def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
                    max_songs: int | None = None, popularity_order: bool = False) -> list[dict]:
     """Query tracks matching AI-generated filters.
@@ -391,7 +402,9 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         artist's output; no need to force variety).
       - Otherwise (broad prompt): proportional bucket sampling across top/mid/niche
         popularity tiers so the AI sees a diverse candidate pool rather than only
-        the most popular tracks.
+        the most popular tracks. Each bucket is capped at its target share of
+        `limit` during final selection, then any leftover quota (e.g. a bucket
+        with fewer tracks than its share) is filled from the remaining pool.
 
     When a mood filter is present, candidates within each bucket are re-ranked by
     summed mood/theme confidence score so the strongest mood matches surface first
@@ -415,10 +428,12 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
             sql_params,
         ).fetchall()
     elif use_buckets:
-        # Fetch proportional share from each popularity bucket.
-        fetch_limit = limit * 3
+        # Fetch from each popularity bucket with headroom for dedupe +
+        # per-artist cap. The final selection loop below enforces proportional
+        # representation using bucket_quotas — without that step, the first
+        # bucket's rows would fill the `limit` before mid/niche get a chance.
         for _name, share, bucket_clause in _BUCKET_SHARES:
-            bucket_limit = max(20, round(fetch_limit * share))
+            bucket_limit = max(20, round(limit * share * 3))
             bucket_sql = (
                 f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} AND ({bucket_clause}) "
                 f"ORDER BY (COALESCE(popularity, 10) * 0.6 + ABS(RANDOM()) % 40) DESC "
@@ -466,18 +481,54 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
     else:
         max_per_artist = max(3, round(max_songs * 0.3))
 
+    # Per-bucket quotas enforce proportional popularity variety in the output.
+    # Only applied when use_buckets is True; for popularity_order / artist-specific
+    # searches the caller wants a single ordered list, not a mix.
+    if use_buckets:
+        bucket_quotas = {name: max(1, round(limit * share)) for name, share, _ in _BUCKET_SHARES}
+    else:
+        bucket_quotas = None
+    bucket_counts: dict[str, int] = {name: 0 for name in (bucket_quotas or {})}
+
     results: list[dict] = []
     artist_counts: dict[str, int] = {}
+    deferred: list[dict] = []  # tracks skipped due to a full bucket quota
+
     for d in deduped:
+        # Per-artist cap
         if max_per_artist is not None:
             artist_key = (d.get("artist") or "").lower().strip()
-            count = artist_counts.get(artist_key, 0)
-            if count >= max_per_artist:
+            if artist_counts.get(artist_key, 0) >= max_per_artist:
                 continue
-            artist_counts[artist_key] = count + 1
+
+        # Per-bucket quota (variety mode only)
+        if bucket_quotas is not None:
+            bname = _bucket_of(d.get("popularity"))
+            if bucket_counts[bname] >= bucket_quotas[bname]:
+                deferred.append(d)
+                continue
+            bucket_counts[bname] += 1
+
+        if max_per_artist is not None:
+            artist_key = (d.get("artist") or "").lower().strip()
+            artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
         results.append(d)
         if len(results) >= limit:
             break
+
+    # Second pass: fill remaining slots from deferred rows (buckets that had more
+    # candidates than their quota). Handles cases where one bucket is undersized
+    # (e.g. small library with few niche tracks) — we still want to hit `limit`.
+    if len(results) < limit and deferred:
+        for d in deferred:
+            if max_per_artist is not None:
+                artist_key = (d.get("artist") or "").lower().strip()
+                if artist_counts.get(artist_key, 0) >= max_per_artist:
+                    continue
+                artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
+            results.append(d)
+            if len(results) >= limit:
+                break
 
     return results
 

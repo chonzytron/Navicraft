@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -27,6 +26,7 @@ import scheduler as sched
 import popularity
 import mood_scanner
 import playlist_watcher
+import generation_pipeline as gen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,26 +41,6 @@ _scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": "", "log
 # Rate limiting for /api/generate
 _last_generate_time = 0.0
 _GENERATE_COOLDOWN = 10  # seconds
-
-# Patterns that indicate a popularity-driven ("best of" / "top hits") request.
-# Used as a deterministic fallback when the AI doesn't set popularity_mode.
-_POPULARITY_PATTERNS = re.compile(
-    r"\b(?:"
-    r"best\s+of"
-    r"|top\s+hits"
-    r"|greatest\s+hits"
-    r"|biggest\s+hits"
-    r"|most\s+popular"
-    r"|top\s+\d+\s+(?:songs?|tracks?|hits?)"
-    r"|best\s+(?:songs?|tracks?)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def _detect_popularity_mode(prompt: str) -> bool:
-    """Detect popularity-driven intent from the prompt using pattern matching."""
-    return bool(_POPULARITY_PATTERNS.search(prompt))
 
 
 def _default_server() -> Optional[str]:
@@ -114,6 +94,7 @@ async def _initial_scan():
             except Exception:
                 logger.warning("Plex ID sync failed (Plex may not be available yet)")
 
+        gen.invalidate_library_summary()
         _scan_progress.update(phase="idle", message="Ready")
 
         # Enrich new tracks with popularity data
@@ -121,6 +102,7 @@ async def _initial_scan():
             await popularity.enrich_popularity(batch_size=500)
         except Exception:
             logger.warning("Startup popularity enrichment failed")
+        gen.invalidate_library_summary()
     except Exception:
         logger.exception("Startup scan failed")
         _scan_progress.update(phase="error", message="Startup scan failed")
@@ -565,6 +547,10 @@ async def trigger_scan(full: bool = False):
                 logger.exception("Health check/cleanup failed")
                 log.append("Health check failed")
 
+            # Library stats have likely changed — drop the cached summary so
+            # the next generation sees the new genre / artist / mood coverage.
+            gen.invalidate_library_summary()
+
             _scan_progress.update(phase="idle", message="Ready", log=log)
 
         # Clear log after 30s (outside the lock so other scans aren't blocked)
@@ -608,31 +594,15 @@ async def generate_playlist(req: GenerateRequest):
             # --- Pass 1 ---
             yield sse("progress", {"phase": "pass1", "message": "Analyzing your prompt..."})
 
-            with db.get_db() as conn:
-                library_summary = {
-                    "song_count": stats["song_count"],
-                    "artist_count": stats["artist_count"],
-                    "album_count": stats["album_count"],
-                    "genres": [g["genre"] for g in db.get_genres(conn)],
-                    "mood_tags": db.get_mood_tag_summary(conn),
-                    "theme_tags": db.get_theme_tag_summary(conn),
-                    "top_artists": db.get_top_artists(conn, limit=150),
-                    "year_range": db.get_year_range(conn),
-                }
+            library_summary = gen.get_library_summary()
 
             filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary, req.provider)
 
             # Detect popularity mode — "best of" / "top hits" requests.
             # Trust the AI flag first; fall back to regex pattern matching
             # so the feature activates reliably even if the AI misses it.
-            popularity_mode = bool(filters.get("popularity_mode")) or _detect_popularity_mode(req.prompt)
-
-            # In popularity mode, strip mood/bpm filters so we rely only on
-            # the core anchor (artist or decade) + popularity ranking.
+            popularity_mode = gen.apply_popularity_mode(filters, req.prompt)
             if popularity_mode:
-                filters.pop("moods", None)
-                filters.pop("bpm_min", None)
-                filters.pop("bpm_max", None)
                 logger.info("Popularity mode active — mood/bpm filters stripped")
 
             # Emit the extracted intent so the user can see what the AI
@@ -658,42 +628,26 @@ async def generate_playlist(req: GenerateRequest):
 
             yield sse("progress", {"phase": "filtering", "message": "Searching library..."})
 
-            # --- Filter candidates ---
-            # Scale candidate limit with requested playlist size — no need to
-            # send 500 candidates when the user only wants 30 songs.  5x ratio
-            # gives the AI plenty of choice; floor of 150 ensures diversity.
-            effective_limit = min(config.max_candidates, max(req.max_songs * 5, 150))
-
-            with db.get_db() as conn:
-                candidates = db.filter_tracks(conn, filters, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
-
-            # Progressive filter relaxation — drop the most data-dependent
-            # filters first (moods, bpm, keywords) to preserve genre/year/artist
-            # context for as long as possible.  Only broaden when we don't have
-            # enough candidates to fill the requested playlist.
-            min_needed = req.max_songs
-
-            # Step 1: drop moods + bpm + keywords (most likely to cause empty
-            # results, especially when mood scanning hasn't run or BPM tags are
-            # sparse)
-            if len(candidates) < min_needed and any(filters.get(k) for k in ("moods", "bpm_min", "bpm_max", "keywords")):
-                yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, relaxing mood/tempo filters..."})
-                relaxed = {k: v for k, v in filters.items() if k not in ("moods", "bpm_min", "bpm_max", "keywords")}
+            # --- Filter candidates with progressive relaxation ---
+            # Iterate the step list from generation_pipeline so SSE
+            # broadening messages stream live between each DB query.
+            effective_limit = gen.candidate_limit_for(req.max_songs)
+            candidates: list[dict] = []
+            for phase_name, step_filters in gen.relaxation_steps(filters):
+                if phase_name != "initial":
+                    yield sse("progress", {
+                        "phase": "broadening",
+                        "message": gen.broadening_message(phase_name, len(candidates)),
+                    })
                 with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, relaxed, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
-
-            # Step 2: keep only genres + artists + negative filters (drop year range)
-            if len(candidates) < min_needed:
-                yield sse("progress", {"phase": "broadening", "message": f"Only {len(candidates)} matches, broadening search..."})
-                broad_keys = ("genres", "artists", "exclude_genres", "exclude_artists", "exclude_keywords")
-                broad_filters = {k: filters[k] for k in broad_keys if filters.get(k)}
-                with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, broad_filters, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
-
-            # Step 3: last resort — no filters at all
-            if len(candidates) < min_needed:
-                with db.get_db() as conn:
-                    candidates = db.filter_tracks(conn, {}, limit=effective_limit, max_songs=req.max_songs, popularity_order=popularity_mode)
+                    candidates = db.filter_tracks(
+                        conn, step_filters,
+                        limit=effective_limit,
+                        max_songs=req.max_songs,
+                        popularity_order=popularity_mode,
+                    )
+                if len(candidates) >= req.max_songs:
+                    break
 
             logger.info("Sending %d candidates to Pass 2", len(candidates))
 
@@ -764,49 +718,9 @@ async def generate_playlist(req: GenerateRequest):
                 if track:
                     matched_songs.append(track)
 
-            total_duration = sum(t.get("duration") or 0 for t in matched_songs)
-
-            # Enforce ±5 minute duration constraint when in duration mode
-            if req.target_duration_min and matched_songs:
-                target_secs = req.target_duration_min * 60
-                tolerance_secs = 5 * 60  # ±5 minutes
-                max_secs = target_secs + tolerance_secs
-                min_secs = target_secs - tolerance_secs
-
-                # Trim from the end if over the upper bound
-                if total_duration > max_secs:
-                    trimmed = []
-                    running = 0.0
-                    for t in matched_songs:
-                        dur = t.get("duration") or 0
-                        if running + dur > max_secs:
-                            # Include if it brings us closer to target than excluding
-                            if abs(running - target_secs) > abs(running + dur - target_secs):
-                                trimmed.append(t)
-                                running += dur
-                            break
-                        trimmed.append(t)
-                        running += dur
-                        # Stop if we're within the target window
-                        if running >= min_secs:
-                            break
-                    matched_songs = trimmed
-                    total_duration = sum(t.get("duration") or 0 for t in matched_songs)
-
-                # Pad from remaining candidates if under the lower bound
-                elif total_duration < min_secs:
-                    used_ids = {t["id"] for t in matched_songs}
-                    remaining = [c for c in candidates if c["id"] not in used_ids]
-                    # Sort remaining by popularity descending for quality padding
-                    remaining.sort(key=lambda c: c.get("popularity") or 0, reverse=True)
-                    for c in remaining:
-                        dur = c.get("duration") or 0
-                        if total_duration + dur > max_secs:
-                            continue
-                        matched_songs.append(c)
-                        total_duration += dur
-                        if total_duration >= min_secs:
-                            break
+            matched_songs, total_duration = gen.enforce_duration(
+                matched_songs, candidates, req.target_duration_min
+            )
 
             result = {
                 "name": ai_result.get("name", "AI Playlist"),

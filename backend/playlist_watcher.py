@@ -14,15 +14,14 @@ After generation the playlist is renamed to the AI-chosen name
 and populated with the matched songs.
 """
 
-import asyncio
 import collections
 import logging
 import re
 import time
 from config import config
-import database as db
 import navidrome
 import ai_engine
+import generation_pipeline as gen
 
 logger = logging.getLogger("navicraft.watcher")
 
@@ -106,21 +105,6 @@ def parse_navicraft_tag(playlist_name: str) -> dict | None:
     }
 
 
-# Patterns for detecting popularity-driven requests (mirrors main.py)
-_POPULARITY_PATTERNS = re.compile(
-    r"\b(?:"
-    r"best\s+of"
-    r"|top\s+hits"
-    r"|greatest\s+hits"
-    r"|biggest\s+hits"
-    r"|most\s+popular"
-    r"|top\s+\d+\s+(?:songs?|tracks?|hits?)"
-    r"|best\s+(?:songs?|tracks?)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
 async def generate_playlist(
     playlist_id: str | None,
     parsed: dict,
@@ -141,58 +125,22 @@ async def generate_playlist(
                 prompt, max_songs, target_duration_min, provider or config.ai_provider)
 
     # --- Pass 1: Extract intent ---
-    with db.get_db() as conn:
-        stats = db.get_library_stats(conn)
-        library_summary = {
-            "song_count": stats["song_count"],
-            "artist_count": stats["artist_count"],
-            "album_count": stats["album_count"],
-            "genres": [g["genre"] for g in db.get_genres(conn)],
-            "mood_tags": db.get_mood_tag_summary(conn),
-            "theme_tags": db.get_theme_tag_summary(conn),
-            "top_artists": db.get_top_artists(conn, limit=150),
-            "year_range": db.get_year_range(conn),
-        }
+    library_summary = gen.get_library_summary()
 
-    if stats["song_count"] == 0:
+    if library_summary.get("song_count", 0) == 0:
         raise ValueError("Library index is empty. Run a scan first.")
 
     filters = await ai_engine.pass1_extract_intent(prompt, library_summary, provider)
+    popularity_mode = gen.apply_popularity_mode(filters, prompt)
 
-    # Detect popularity mode
-    popularity_mode = bool(filters.get("popularity_mode")) or bool(_POPULARITY_PATTERNS.search(prompt))
-    if popularity_mode:
-        filters.pop("moods", None)
-        filters.pop("bpm_min", None)
-        filters.pop("bpm_max", None)
-
-    # --- Filter candidates ---
-    effective_limit = min(config.max_candidates, max(max_songs * 5, 150))
-
-    with db.get_db() as conn:
-        candidates = db.filter_tracks(conn, filters, limit=effective_limit,
-                                       max_songs=max_songs, popularity_order=popularity_mode)
-
-    min_needed = max_songs
-
-    # Progressive relaxation (same logic as main.py)
-    if len(candidates) < min_needed and any(filters.get(k) for k in ("moods", "bpm_min", "bpm_max", "keywords")):
-        relaxed = {k: v for k, v in filters.items() if k not in ("moods", "bpm_min", "bpm_max", "keywords")}
-        with db.get_db() as conn:
-            candidates = db.filter_tracks(conn, relaxed, limit=effective_limit,
-                                           max_songs=max_songs, popularity_order=popularity_mode)
-
-    if len(candidates) < min_needed:
-        broad_keys = ("genres", "artists", "exclude_genres", "exclude_artists", "exclude_keywords")
-        broad_filters = {k: filters[k] for k in broad_keys if filters.get(k)}
-        with db.get_db() as conn:
-            candidates = db.filter_tracks(conn, broad_filters, limit=effective_limit,
-                                           max_songs=max_songs, popularity_order=popularity_mode)
-
-    if len(candidates) < min_needed:
-        with db.get_db() as conn:
-            candidates = db.filter_tracks(conn, {}, limit=effective_limit,
-                                           max_songs=max_songs, popularity_order=popularity_mode)
+    # --- Filter candidates (with progressive relaxation) ---
+    effective_limit = gen.candidate_limit_for(max_songs)
+    candidates = await gen.filter_with_relaxation(
+        filters=filters,
+        max_songs=max_songs,
+        effective_limit=effective_limit,
+        popularity_mode=popularity_mode,
+    )
 
     logger.info("Watcher: %d candidates for prompt '%s'", len(candidates), prompt[:60])
 
@@ -220,42 +168,9 @@ async def generate_playlist(
         if track:
             matched_songs.append(track)
 
-    # Duration enforcement
-    total_duration = sum(t.get("duration") or 0 for t in matched_songs)
-    if target_duration_min and matched_songs:
-        target_secs = target_duration_min * 60
-        tolerance_secs = 5 * 60
-        max_secs = target_secs + tolerance_secs
-        min_secs = target_secs - tolerance_secs
-
-        if total_duration > max_secs:
-            trimmed = []
-            running = 0.0
-            for t in matched_songs:
-                dur = t.get("duration") or 0
-                if running + dur > max_secs:
-                    if abs(running - target_secs) > abs(running + dur - target_secs):
-                        trimmed.append(t)
-                        running += dur
-                    break
-                trimmed.append(t)
-                running += dur
-                if running >= min_secs:
-                    break
-            matched_songs = trimmed
-            total_duration = sum(t.get("duration") or 0 for t in matched_songs)
-        elif total_duration < min_secs:
-            used_ids = {t["id"] for t in matched_songs}
-            remaining = [c for c in candidates if c["id"] not in used_ids]
-            remaining.sort(key=lambda c: c.get("popularity") or 0, reverse=True)
-            for c in remaining:
-                dur = c.get("duration") or 0
-                if total_duration + dur > max_secs:
-                    continue
-                matched_songs.append(c)
-                total_duration += dur
-                if total_duration >= min_secs:
-                    break
+    matched_songs, total_duration = gen.enforce_duration(
+        matched_songs, candidates, target_duration_min
+    )
 
     # Get Navidrome IDs for the matched songs
     nd_ids = [t["navidrome_id"] for t in matched_songs if t.get("navidrome_id")]

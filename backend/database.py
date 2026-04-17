@@ -60,6 +60,8 @@ CREATE INDEX IF NOT EXISTS idx_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_year ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_mood ON tracks(mood);
 CREATE INDEX IF NOT EXISTS idx_navidrome_id ON tracks(navidrome_id);
+CREATE INDEX IF NOT EXISTS idx_popularity ON tracks(popularity);
+CREATE INDEX IF NOT EXISTS idx_artist_popularity ON tracks(artist, popularity);
 
 CREATE TABLE IF NOT EXISTS scan_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,6 +96,11 @@ def init_db():
         _migrate(conn)
         # Create indexes on migrated columns (safe now that columns exist)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_plex_id ON tracks(plex_id)")
+        # Partial index speeds up the mood scanner's hot query
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_essentia_pending "
+            "ON tracks(id) WHERE essentia_scanned_at IS NULL"
+        )
     logger.info("Database initialized at %s", config.db_path)
 
 
@@ -261,19 +268,25 @@ def get_year_range(db: sqlite3.Connection) -> dict:
     return dict(row) if row else {"min_year": None, "max_year": None}
 
 
-def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
-                   max_songs: int | None = None, popularity_order: bool = False) -> list[dict]:
-    """
-    Query tracks matching AI-generated filters.
-    filters can include: genres, year_min, year_max, artists, moods, bpm_min, bpm_max,
-                         exclude_genres, exclude_artists, exclude_keywords
-    Per-artist diversity cap is applied as 30% of max_songs (min 3) when no
-    specific artists are requested. Skipped entirely when artists are specified.
-    When popularity_order is True, results are sorted strictly by popularity
-    descending (used for "best of" / "top hits" requests).
-    """
+# Popularity bucket thresholds for variety sampling.
+# Tracks split into 3 tiers by popularity score (0-100 scale from enrichment).
+# When no specific artist is requested, candidates are drawn proportionally
+# from each tier so the AI sees a mix of popular, mid-tier and niche tracks
+# rather than a top-heavy list.
+_BUCKET_TOP = 65
+_BUCKET_MID = 25
+_BUCKET_SHARES = (
+    ("top", 0.35, f"COALESCE(popularity, 0) >= {_BUCKET_TOP}"),
+    ("mid", 0.45, f"COALESCE(popularity, 0) >= {_BUCKET_MID} AND COALESCE(popularity, 0) < {_BUCKET_TOP}"),
+    ("niche", 0.20, f"popularity IS NULL OR popularity < {_BUCKET_MID}"),
+)
+
+
+def _build_filter_where(filters: dict) -> tuple[str, list]:
+    """Build the SQL WHERE clause and params list for a filter dict.
+    Shared by filter_tracks and its bucket variants."""
     conditions = ["title IS NOT NULL"]
-    params = []
+    params: list = []
 
     if filters.get("genres"):
         genres = filters["genres"]
@@ -326,7 +339,6 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         for kw in keywords:
             params.extend([f"%{kw.lower()}%", f"%{kw.lower()}%", f"%{kw.lower()}%"])
 
-    # Negative filters — exclude genres, artists, keywords
     if filters.get("exclude_genres"):
         for eg in filters["exclude_genres"]:
             conditions.append("LOWER(genre) NOT LIKE ?")
@@ -342,47 +354,181 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
             conditions.append("LOWER(title) NOT LIKE ? AND LOWER(album) NOT LIKE ?")
             params.extend([f"%{ek.lower()}%", f"%{ek.lower()}%"])
 
-    where = " AND ".join(conditions)
+    return " AND ".join(conditions), params
 
-    # Fetch more than needed to allow per-artist capping
-    fetch_limit = limit * 3
-    params.append(fetch_limit)
 
-    if popularity_order:
-        order_clause = "COALESCE(popularity, 0) DESC"
-    else:
-        order_clause = "(COALESCE(popularity, 30) * 0.7 + ABS(RANDOM()) % 30) DESC"
+_TRACK_COLS = (
+    "id, title, artist, album_artist, album, genre, year, "
+    "duration, bpm, composer, mood, navidrome_id, plex_id, file_path, "
+    "popularity, mood_tags, theme_tags"
+)
 
-    rows = db.execute(f"""
-        SELECT id, title, artist, album_artist, album, genre, year,
-               duration, bpm, composer, mood, navidrome_id, plex_id, file_path,
-               popularity, mood_tags, theme_tags
-        FROM tracks
-        WHERE {where}
-        ORDER BY {order_clause}
-        LIMIT ?
-    """, params).fetchall()
 
-    # Apply per-artist diversity cap (skipped when specific artists are requested)
+def _mood_match_score(track: dict, mood_set: set[str]) -> float:
+    """Sum of confidence scores for tags that match the requested moods.
+    Matches both mood_tags and theme_tags, since the AI's 'moods' filter
+    draws from the combined vocabulary."""
+    if not mood_set:
+        return 0.0
+    total = 0.0
+    for col in ("mood_tags", "theme_tags"):
+        for name, score in _parse_scored_tags_with_scores(track.get(col) or ""):
+            if name.lower() in mood_set:
+                total += score
+    return total
+
+
+def _bucket_of(popularity: int | None) -> str:
+    """Classify a popularity score into its bucket name."""
+    if popularity is None:
+        return "niche"
+    if popularity >= _BUCKET_TOP:
+        return "top"
+    if popularity >= _BUCKET_MID:
+        return "mid"
+    return "niche"
+
+
+def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
+                   max_songs: int | None = None, popularity_order: bool = False) -> list[dict]:
+    """Query tracks matching AI-generated filters.
+
+    filters can include: genres, year_min, year_max, artists, moods, bpm_min, bpm_max,
+                         exclude_genres, exclude_artists, exclude_keywords.
+
+    Candidate selection strategy:
+      - popularity_order=True: strict popularity-desc ordering ("best of" / "top hits").
+      - Artist filter present: popularity-weighted single pass (the user wants that
+        artist's output; no need to force variety).
+      - Otherwise (broad prompt): proportional bucket sampling across top/mid/niche
+        popularity tiers so the AI sees a diverse candidate pool rather than only
+        the most popular tracks. Each bucket is capped at its target share of
+        `limit` during final selection, then any leftover quota (e.g. a bucket
+        with fewer tracks than its share) is filled from the remaining pool.
+
+    When a mood filter is present, candidates within each bucket are re-ranked by
+    summed mood/theme confidence score so the strongest mood matches surface first
+    while the bucket mix preserves popularity variety.
+
+    Per-artist diversity cap: 30% of max_songs (min 3) when no specific artists are
+    requested. Skipped when artists are specified.
+    """
+    where, params = _build_filter_where(filters)
+
+    mood_set = {m.lower() for m in (filters.get("moods") or [])}
     has_artist_filter = bool(filters.get("artists"))
+    use_buckets = not popularity_order and not has_artist_filter
+
+    rows: list[sqlite3.Row] = []
+    if popularity_order:
+        sql_params = list(params) + [limit * 3]
+        rows = db.execute(
+            f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} "
+            f"ORDER BY COALESCE(popularity, 0) DESC LIMIT ?",
+            sql_params,
+        ).fetchall()
+    elif use_buckets:
+        # Fetch from each popularity bucket with headroom for dedupe +
+        # per-artist cap. The final selection loop below enforces proportional
+        # representation using bucket_quotas — without that step, the first
+        # bucket's rows would fill the `limit` before mid/niche get a chance.
+        for _name, share, bucket_clause in _BUCKET_SHARES:
+            bucket_limit = max(20, round(limit * share * 3))
+            bucket_sql = (
+                f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} AND ({bucket_clause}) "
+                f"ORDER BY (COALESCE(popularity, 10) * 0.6 + ABS(RANDOM()) % 40) DESC "
+                f"LIMIT ?"
+            )
+            rows.extend(db.execute(bucket_sql, [*params, bucket_limit]).fetchall())
+    else:
+        # Artist-specific prompt: single popularity-weighted pass.
+        sql_params = list(params) + [limit * 3]
+        rows = db.execute(
+            f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} "
+            f"ORDER BY (COALESCE(popularity, 30) * 0.7 + ABS(RANDOM()) % 30) DESC "
+            f"LIMIT ?",
+            sql_params,
+        ).fetchall()
+
+    # Parse rows and compute mood confidence scores.
+    parsed = [dict(r) for r in rows]
+    if mood_set:
+        for t in parsed:
+            t["_mood_score"] = _mood_match_score(t, mood_set)
+        # Sort by mood score primarily, popularity secondary — keeps the
+        # strongest mood matches at the top of each bucket while still
+        # surfacing popular tracks when mood confidence ties.
+        parsed.sort(
+            key=lambda t: (
+                -(t.get("_mood_score") or 0.0),
+                -(t.get("popularity") or 0),
+            )
+        )
+
+    # De-dupe (bucket queries can overlap at boundaries if popularity changes mid-query).
+    seen_ids: set[int] = set()
+    deduped: list[dict] = []
+    for t in parsed:
+        tid = t.get("id")
+        if tid in seen_ids:
+            continue
+        seen_ids.add(tid)
+        deduped.append(t)
+
+    # Per-artist diversity cap — skipped when specific artists requested.
     if has_artist_filter or max_songs is None:
-        max_per_artist = None  # No cap
+        max_per_artist = None
     else:
         max_per_artist = max(3, round(max_songs * 0.3))
 
-    results = []
+    # Per-bucket quotas enforce proportional popularity variety in the output.
+    # Only applied when use_buckets is True; for popularity_order / artist-specific
+    # searches the caller wants a single ordered list, not a mix.
+    if use_buckets:
+        bucket_quotas = {name: max(1, round(limit * share)) for name, share, _ in _BUCKET_SHARES}
+    else:
+        bucket_quotas = None
+    bucket_counts: dict[str, int] = {name: 0 for name in (bucket_quotas or {})}
+
+    results: list[dict] = []
     artist_counts: dict[str, int] = {}
-    for r in rows:
-        d = dict(r)
+    deferred: list[dict] = []  # tracks skipped due to a full bucket quota
+
+    for d in deduped:
+        # Per-artist cap
         if max_per_artist is not None:
             artist_key = (d.get("artist") or "").lower().strip()
-            count = artist_counts.get(artist_key, 0)
-            if count >= max_per_artist:
+            if artist_counts.get(artist_key, 0) >= max_per_artist:
                 continue
-            artist_counts[artist_key] = count + 1
+
+        # Per-bucket quota (variety mode only)
+        if bucket_quotas is not None:
+            bname = _bucket_of(d.get("popularity"))
+            if bucket_counts[bname] >= bucket_quotas[bname]:
+                deferred.append(d)
+                continue
+            bucket_counts[bname] += 1
+
+        if max_per_artist is not None:
+            artist_key = (d.get("artist") or "").lower().strip()
+            artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
         results.append(d)
         if len(results) >= limit:
             break
+
+    # Second pass: fill remaining slots from deferred rows (buckets that had more
+    # candidates than their quota). Handles cases where one bucket is undersized
+    # (e.g. small library with few niche tracks) — we still want to hit `limit`.
+    if len(results) < limit and deferred:
+        for d in deferred:
+            if max_per_artist is not None:
+                artist_key = (d.get("artist") or "").lower().strip()
+                if artist_counts.get(artist_key, 0) >= max_per_artist:
+                    continue
+                artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
+            results.append(d)
+            if len(results) >= limit:
+                break
 
     return results
 
@@ -704,17 +850,40 @@ def reset_mood_tags(db: sqlite3.Connection) -> int:
 
 def _parse_scored_tags(tag_string: str) -> list[str]:
     """Parse a scored tag string like 'happy:0.85, energetic:0.72' into tag names.
-    Also handles legacy format without scores (e.g. 'happy, energetic')."""
+    Also handles legacy format without scores (e.g. 'happy, energetic').
+    Splits on ',' and strips whitespace so missing-space variants aren't dropped."""
     tags = []
-    for part in tag_string.split(", "):
+    for part in tag_string.split(","):
         part = part.strip()
         if not part:
             continue
-        # Strip confidence score if present (e.g. "happy:0.85" -> "happy")
         tag_name = part.split(":")[0].strip()
         if tag_name:
             tags.append(tag_name)
     return tags
+
+
+def _parse_scored_tags_with_scores(tag_string: str) -> list[tuple[str, float]]:
+    """Parse a scored tag string into (tag, score) pairs. Legacy unscored tags get 1.0."""
+    if not tag_string:
+        return []
+    result = []
+    for part in tag_string.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            name, _, score_str = part.partition(":")
+            name = name.strip()
+            try:
+                score = float(score_str.strip())
+            except (ValueError, TypeError):
+                score = 1.0
+        else:
+            name, score = part, 1.0
+        if name:
+            result.append((name, score))
+    return result
 
 
 def get_mood_tag_summary(db: sqlite3.Connection) -> list[dict]:

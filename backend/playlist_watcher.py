@@ -20,7 +20,6 @@ import re
 import time
 from config import config
 import navidrome
-import ai_engine
 import generation_pipeline as gen
 
 logger = logging.getLogger("navicraft.watcher")
@@ -124,60 +123,24 @@ async def generate_playlist(
     logger.info("Generating playlist for prompt: '%s' (songs=%d, duration=%s, provider=%s)",
                 prompt, max_songs, target_duration_min, provider or config.ai_provider)
 
-    # --- Pass 1: Extract intent ---
-    library_summary = gen.get_library_summary()
+    # Run the shared two-pass pipeline; the watcher has no SSE consumer so we
+    # ignore progress events and keep only the final result.
+    result = None
+    async for kind, data in gen.run_generation(prompt, max_songs, target_duration_min, provider):
+        if kind == "result":
+            result = data
+    if result is None:
+        raise ValueError("Generation produced no result")
 
-    if library_summary.get("song_count", 0) == 0:
-        raise ValueError("Library index is empty. Run a scan first.")
-
-    filters = await ai_engine.pass1_extract_intent(prompt, library_summary, provider)
-    popularity_mode = gen.apply_popularity_mode(filters, prompt)
-
-    # --- Filter candidates (with progressive relaxation) ---
-    effective_limit = gen.candidate_limit_for(max_songs)
-    candidates = await gen.filter_with_relaxation(
-        filters=filters,
-        max_songs=max_songs,
-        effective_limit=effective_limit,
-        popularity_mode=popularity_mode,
-    )
-
-    logger.info("Watcher: %d candidates for prompt '%s'", len(candidates), prompt[:60])
-
-    # --- Pass 2: Select songs ---
-    ai_result = await ai_engine.pass2_select_songs(
-        prompt=prompt,
-        candidates=candidates,
-        max_songs=max_songs,
-        provider=provider,
-        target_duration_min=target_duration_min,
-        filters=filters,
-    )
-
-    # --- Match selections to Navidrome IDs ---
-    candidate_map = {c["id"]: c for c in candidates}
-    song_ids = ai_result.get("song_ids") or [s.get("id") for s in ai_result.get("songs", [])]
-
-    matched_songs = []
-    for raw_id in song_ids:
-        try:
-            sid = int(raw_id)
-        except (TypeError, ValueError):
-            continue
-        track = candidate_map.get(sid)
-        if track:
-            matched_songs.append(track)
-
-    matched_songs, total_duration = gen.enforce_duration(
-        matched_songs, candidates, target_duration_min
-    )
+    matched_songs = result["songs"]
+    total_duration = result["total_duration"]
 
     # Get Navidrome IDs for the matched songs
     nd_ids = [t["navidrome_id"] for t in matched_songs if t.get("navidrome_id")]
     if not nd_ids:
         raise ValueError("No songs could be matched to Navidrome IDs. Run a library scan to sync.")
 
-    playlist_name = ai_result.get("name") or prompt[:80]
+    playlist_name = result["name"] or prompt[:80]
 
     if save and playlist_id:
         # Update the playlist: rename and add songs
@@ -187,7 +150,7 @@ async def generate_playlist(
 
     return {
         "name": playlist_name,
-        "description": ai_result.get("description", ""),
+        "description": result.get("description", ""),
         "navidrome_song_ids": nd_ids,
         "songs": [
             {

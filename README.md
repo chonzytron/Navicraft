@@ -24,8 +24,11 @@ AI-powered playlist generator for [Navidrome](https://www.navidrome.org/) and [P
 3. GENERATE (two-pass AI)
    Pass 1: prompt + library summary → structured filters (genres, era, mood, tempo, keywords, exclusions)
    SQLite query narrows to up to 500 candidates, biased by popularity with random jitter
-   Progressive filter relaxation if not enough matches: drop moods/bpm/keywords → drop year range → genre+artists only → unfiltered
+   Progressive filter relaxation if not enough matches: drop moods/bpm/keywords → keep era + broaden genre → genre+artists only → unfiltered
+   (popularity "best of" requests keep their defining genre/decade/artist instead of falling through to unfiltered)
    Per-artist diversity cap (30% of requested songs, min 3) prevents one artist dominating candidates
+   Artist filters match on token boundaries (so "Queen" won't pull in "Queens of the Stone Age") with exact matches ranked first
+   Duration-targeted playlists size the candidate pool from the target length, not the default song count
    Pass 2: prompt + candidate list + search filter context → AI picks & orders the final playlist, cross-checking genre fidelity and mixing well-known with lesser-known artists
 
 4. CREATE PLAYLIST

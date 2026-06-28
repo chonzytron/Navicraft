@@ -21,7 +21,6 @@ import database as db
 import scanner
 import navidrome
 import plex
-import ai_engine
 import scheduler as sched
 import popularity
 import mood_scanner
@@ -226,6 +225,11 @@ async def update_config(body: dict):
         except (ValueError, TypeError):
             raise HTTPException(400, detail="mood_scan_to_hour must be 0–23")
     config.update_from_dict(body)
+    # Interval-based scheduler triggers are fixed at startup, so re-apply them
+    # when the relevant settings change (otherwise the UI control silently does
+    # nothing until a restart).
+    if "scan_interval_hours" in body or "navicraft_watcher_interval" in body:
+        sched.reschedule_jobs()
     return {"status": "ok", "config": config.get_editable()}
 
 
@@ -328,9 +332,9 @@ async def popularity_status():
     with db.get_db() as conn:
         total = db.execute_count(conn, "SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL")
         remaining = db.count_tracks_without_popularity(conn)
-        deezer_missing = db.count_tracks_missing_deezer(conn)
-        lastfm_missing = db.count_tracks_missing_lastfm(conn)
-        mb_missing = db.count_tracks_missing_musicbrainz(conn)
+        deezer_missing = db.count_tracks_missing_source(conn, "deezer")
+        lastfm_missing = db.count_tracks_missing_source(conn, "lastfm")
+        mb_missing = db.count_tracks_missing_source(conn, "musicbrainz")
     enriched = total - remaining
     deezer_enriched = total - deezer_missing
     lastfm_enriched = total - lastfm_missing
@@ -591,146 +595,33 @@ async def generate_playlist(req: GenerateRequest):
             return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
         try:
-            # --- Pass 1 ---
-            yield sse("progress", {"phase": "pass1", "message": "Analyzing your prompt..."})
+            # Run the shared two-pass pipeline, forwarding its progress events
+            # as SSE and capturing the final result.
+            result = None
+            async for kind, data in gen.run_generation(
+                req.prompt, req.max_songs, req.target_duration_min, req.provider
+            ):
+                if kind == "progress":
+                    yield sse("progress", data)
+                else:
+                    result = data
 
-            library_summary = gen.get_library_summary()
-
-            filters = await ai_engine.pass1_extract_intent(req.prompt, library_summary, req.provider)
-
-            # Detect popularity mode — "best of" / "top hits" requests.
-            # Trust the AI flag first; fall back to regex pattern matching
-            # so the feature activates reliably even if the AI misses it.
-            popularity_mode = gen.apply_popularity_mode(filters, req.prompt)
-            if popularity_mode:
-                logger.info("Popularity mode active — mood/bpm filters stripped")
-
-            # Emit the extracted intent so the user can see what the AI
-            # distilled from their prompt before we query the library.
-            yield sse("progress", {
-                "phase": "pass1_done",
-                "message": "Intent extracted",
-                "filters": {
-                    "genres": filters.get("genres") or [],
-                    "artists": filters.get("artists") or [],
-                    "moods": filters.get("moods") or [],
-                    "year_min": filters.get("year_min"),
-                    "year_max": filters.get("year_max"),
-                    "bpm_min": filters.get("bpm_min"),
-                    "bpm_max": filters.get("bpm_max"),
-                    "keywords": filters.get("keywords") or [],
-                    "exclude_genres": filters.get("exclude_genres") or [],
-                    "exclude_artists": filters.get("exclude_artists") or [],
-                    "exclude_keywords": filters.get("exclude_keywords") or [],
-                    "popularity_mode": popularity_mode,
-                },
-            })
-
-            yield sse("progress", {"phase": "filtering", "message": "Searching library..."})
-
-            # --- Filter candidates with progressive relaxation ---
-            # Iterate the step list from generation_pipeline so SSE
-            # broadening messages stream live between each DB query.
-            effective_limit = gen.candidate_limit_for(req.max_songs)
-            candidates: list[dict] = []
-            for phase_name, step_filters in gen.relaxation_steps(filters):
-                if phase_name != "initial":
-                    yield sse("progress", {
-                        "phase": "broadening",
-                        "message": gen.broadening_message(phase_name, len(candidates)),
-                    })
-                with db.get_db() as conn:
-                    candidates = db.filter_tracks(
-                        conn, step_filters,
-                        limit=effective_limit,
-                        max_songs=req.max_songs,
-                        popularity_order=popularity_mode,
-                    )
-                if len(candidates) >= req.max_songs:
-                    break
-
-            logger.info("Sending %d candidates to Pass 2", len(candidates))
-
-            # Emit a preview of the filtered candidate pool so the user can see
-            # which artists are being considered heading into Pass 2.
-            seen_artists = set()
-            sample_artists = []
-            for c in candidates:
-                a = (c.get("artist") or "").strip()
-                if not a or a.lower() in seen_artists:
-                    continue
-                seen_artists.add(a.lower())
-                sample_artists.append(a)
-                if len(sample_artists) >= 15:
-                    break
-            unique_artist_total = len({
-                (c.get("artist") or "").strip().lower()
-                for c in candidates if c.get("artist")
-            })
-            sample_tracks = [
-                {"title": c.get("title") or "", "artist": c.get("artist") or ""}
-                for c in candidates[:6]
-            ]
-            yield sse("progress", {
-                "phase": "filtering_done",
-                "message": f"Found {len(candidates)} candidates",
-                "candidates_found": len(candidates),
-                "unique_artists": unique_artist_total,
-                "sample_artists": sample_artists,
-                "sample_tracks": sample_tracks,
-            })
-
-            # --- Pass 2 ---
-            yield sse("progress", {"phase": "pass2", "message": f"Selecting from {len(candidates)} candidates..."})
-
-            ai_result = await ai_engine.pass2_select_songs(
-                prompt=req.prompt,
-                candidates=candidates,
-                max_songs=req.max_songs,
-                target_duration_min=req.target_duration_min,
-                provider=req.provider,
-                filters=filters,
-            )
-
-            selected_ids = ai_result.get("song_ids") or [
-                s.get("id") for s in ai_result.get("songs", [])
-            ]
-            yield sse("progress", {
-                "phase": "pass2_done",
-                "message": f"AI selected {len(selected_ids)} songs",
-                "selected_count": len(selected_ids),
-                "playlist_name": ai_result.get("name") or "",
-            })
+            if result is None:
+                yield sse("error", {"detail": "Generation produced no result."})
+                return
 
             yield sse("progress", {"phase": "matching", "message": "Building playlist..."})
 
-            # --- Match selections ---
-            candidate_map = {c["id"]: c for c in candidates}
-            matched_songs = []
-            # Support both compact song_ids format and legacy songs format
-            song_ids = ai_result.get("song_ids") or [s.get("id") for s in ai_result.get("songs", [])]
-            for raw_id in song_ids:
-                try:
-                    sid = int(raw_id)
-                except (TypeError, ValueError):
-                    continue
-                track = candidate_map.get(sid)
-                if track:
-                    matched_songs.append(track)
-
-            matched_songs, total_duration = gen.enforce_duration(
-                matched_songs, candidates, req.target_duration_min
-            )
-
-            result = {
-                "name": ai_result.get("name", "AI Playlist"),
-                "description": ai_result.get("description", ""),
+            matched_songs = result["songs"]
+            response = {
+                "name": result["name"],
+                "description": result["description"],
                 "songs": matched_songs,
                 "total_matched": len(matched_songs),
-                "total_suggested": len(ai_result.get("song_ids") or ai_result.get("songs", [])),
-                "total_duration": round(total_duration),
-                "filters_used": filters,
-                "candidates_found": len(candidates),
+                "total_suggested": result["total_suggested"],
+                "total_duration": result["total_duration"],
+                "filters_used": result["filters"],
+                "candidates_found": result["candidates_found"],
                 "created": False,
                 "server_playlist_id": None,
                 "server": None,
@@ -740,8 +631,8 @@ async def generate_playlist(req: GenerateRequest):
             if req.auto_create and matched_songs:
                 target = req.server or _default_server()
                 if not target:
-                    result["auto_create_error"] = "No media server configured. Set up Navidrome or Plex."
-                    yield sse("result", result)
+                    response["auto_create_error"] = "No media server configured. Set up Navidrome or Plex."
+                    yield sse("result", response)
                     return
                 id_field = "plex_id" if target == "plex" else "navidrome_id"
                 server_ids = [t[id_field] for t in matched_songs if t.get(id_field)]
@@ -750,19 +641,19 @@ async def generate_playlist(req: GenerateRequest):
                     try:
                         yield sse("progress", {"phase": "saving", "message": f"Saving to {server_label}..."})
                         if target == "plex":
-                            pl = await plex.create_playlist(result["name"], server_ids)
+                            pl = await plex.create_playlist(response["name"], server_ids)
                         else:
-                            pl = await navidrome.create_playlist(result["name"], server_ids)
-                        result["created"] = True
-                        result["server_playlist_id"] = pl["id"]
-                        result["server"] = target
+                            pl = await navidrome.create_playlist(response["name"], server_ids)
+                        response["created"] = True
+                        response["server_playlist_id"] = pl["id"]
+                        response["server"] = target
                     except Exception as e:
                         logger.warning("Auto-create to %s failed: %s", server_label, e)
-                        result["auto_create_error"] = str(e)
+                        response["auto_create_error"] = str(e)
                 else:
-                    result["auto_create_error"] = f"No {server_label} IDs matched. Run a library scan to sync."
+                    response["auto_create_error"] = f"No {server_label} IDs matched. Run a library scan to sync."
 
-            yield sse("result", result)
+            yield sse("result", response)
 
         except ValueError as e:
             yield sse("error", {"detail": str(e)})

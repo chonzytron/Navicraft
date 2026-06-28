@@ -5,6 +5,7 @@ Stores rich metadata per track, supports filtering queries for the AI pipeline.
 
 import sqlite3
 import os
+import re
 import time
 import logging
 from contextlib import contextmanager
@@ -129,11 +130,30 @@ def _migrate(conn: sqlite3.Connection):
             logger.info("Migrated: added column '%s' to tracks", col)
 
 
+def _sqlite_regexp(pattern: str, value: Optional[str]) -> int:
+    """SQLite REGEXP implementation: `value REGEXP pattern` -> regexp(pattern, value)."""
+    if value is None:
+        return 0
+    return 1 if re.search(pattern, value) else 0
+
+
+def _word_pattern(term: str) -> str:
+    """Build a case-insensitive, token-bounded regex for an artist/genre name.
+
+    Uses lookarounds rather than ``\\b`` so names that begin/end with non-word
+    characters (e.g. "!!!") still match, while ensuring the term isn't flanked by
+    alphanumerics. This stops "Queen" from matching "Queens of the Stone Age" while
+    still matching "Queen Latifah" or "The Beatles".
+    """
+    return r"(?i)(?<![a-z0-9])" + re.escape(term.strip()) + r"(?![a-z0-9])"
+
+
 @contextmanager
 def get_db():
     """Context manager for database connections."""
     conn = sqlite3.connect(config.db_path, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.create_function("regexp", 2, _sqlite_regexp, deterministic=True)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     try:
@@ -190,22 +210,12 @@ def remove_tracks(db: sqlite3.Connection, paths: list):
     db.execute(f"DELETE FROM tracks WHERE file_path IN ({placeholders})", paths)
 
 
-def update_navidrome_id(db: sqlite3.Connection, file_path: str, navidrome_id: str):
-    """Set the Navidrome ID for a track."""
-    db.execute("UPDATE tracks SET navidrome_id = ? WHERE file_path = ?", (navidrome_id, file_path))
-
-
 def bulk_update_navidrome_ids(db: sqlite3.Connection, mapping: dict):
     """Bulk update navidrome IDs. mapping = {file_path: navidrome_id}"""
     db.executemany(
         "UPDATE tracks SET navidrome_id = ? WHERE file_path = ?",
         [(nid, fp) for fp, nid in mapping.items()]
     )
-
-
-def update_plex_id(db: sqlite3.Connection, file_path: str, plex_id: str):
-    """Set the Plex rating key for a track."""
-    db.execute("UPDATE tracks SET plex_id = ? WHERE file_path = ?", (plex_id, file_path))
 
 
 def bulk_update_plex_ids(db: sqlite3.Connection, mapping: dict):
@@ -304,12 +314,15 @@ def _build_filter_where(filters: dict) -> tuple[str, list]:
 
     if filters.get("artists"):
         artists = filters["artists"]
+        # Token-bounded regex (not substring): "Queen" must not match
+        # "Queens of the Stone Age". Exact matches are ranked first in filter_tracks.
         artist_clauses = " OR ".join(
-            "(LOWER(artist) LIKE ? OR LOWER(album_artist) LIKE ?)" for _ in artists
+            "(artist REGEXP ? OR album_artist REGEXP ?)" for _ in artists
         )
         conditions.append(f"({artist_clauses})")
         for a in artists:
-            params.extend([f"%{a.lower()}%", f"%{a.lower()}%"])
+            pat = _word_pattern(a)
+            params.extend([pat, pat])
 
     if filters.get("moods"):
         moods = filters["moods"]
@@ -340,14 +353,17 @@ def _build_filter_where(filters: dict) -> tuple[str, list]:
             params.extend([f"%{kw.lower()}%", f"%{kw.lower()}%", f"%{kw.lower()}%"])
 
     if filters.get("exclude_genres"):
+        # Token-bounded so excluding "rap" doesn't also drop "trap"; NULL-safe so
+        # untagged tracks aren't silently removed by an exclusion (NULL NOT LIKE x
+        # would otherwise evaluate falsey and exclude them).
         for eg in filters["exclude_genres"]:
-            conditions.append("LOWER(genre) NOT LIKE ?")
-            params.append(f"%{eg.lower()}%")
+            conditions.append("(genre IS NULL OR NOT (genre REGEXP ?))")
+            params.append(_word_pattern(eg))
 
     if filters.get("exclude_artists"):
         for ea in filters["exclude_artists"]:
-            conditions.append("LOWER(artist) NOT LIKE ?")
-            params.append(f"%{ea.lower()}%")
+            conditions.append("(artist IS NULL OR NOT (artist REGEXP ?))")
+            params.append(_word_pattern(ea))
 
     if filters.get("exclude_keywords"):
         for ek in filters["exclude_keywords"]:
@@ -378,6 +394,32 @@ def _mood_match_score(track: dict, mood_set: set[str]) -> float:
     return total
 
 
+def _artist_exact_order(filters: dict) -> tuple[str, list]:
+    """Build an ORDER BY prefix that ranks exact artist matches first.
+
+    Token-bounded WHERE matching still lets "Queen" match "Queen Latifah"; this
+    expression floats the genuine "Queen" tracks above near-name collisions so
+    artist-specific / popularity-mode requests stay on-target. Returns ("", [])
+    when no artists are requested.
+    """
+    artists = [a.lower().strip() for a in (filters.get("artists") or []) if a and a.strip()]
+    if not artists:
+        return "", []
+    placeholders = ",".join("?" for _ in artists)
+    expr = (
+        f"(CASE WHEN LOWER(TRIM(artist)) IN ({placeholders}) "
+        f"OR LOWER(TRIM(album_artist)) IN ({placeholders}) THEN 1 ELSE 0 END) DESC, "
+    )
+    return expr, artists + artists
+
+
+# Jitter expression for variety ordering. Uses (RANDOM() % N + N) % N rather than
+# ABS(RANDOM()) — ABS() raises an integer-overflow error for the single value
+# RANDOM() == -2^63, which would fail the whole candidate query.
+def _jitter(n: int) -> str:
+    return f"(RANDOM() % {n} + {n}) % {n}"
+
+
 def _bucket_of(popularity: int | None) -> str:
     """Classify a popularity score into its bucket name."""
     if popularity is None:
@@ -406,9 +448,11 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         `limit` during final selection, then any leftover quota (e.g. a bucket
         with fewer tracks than its share) is filled from the remaining pool.
 
-    When a mood filter is present, candidates within each bucket are re-ranked by
-    summed mood/theme confidence score so the strongest mood matches surface first
-    while the bucket mix preserves popularity variety.
+    When a mood filter is present, the merged candidate set is re-ranked by summed
+    mood/theme confidence score (popularity as the tiebreaker) so the strongest mood
+    matches surface first while the bucket mix preserves popularity variety. Buckets
+    also fetch a larger slice in mood mode so high-confidence-but-obscure tracks
+    aren't truncated away before the re-rank.
 
     Per-artist diversity cap: 30% of max_songs (min 3) when no specific artists are
     requested. Skipped when artists are specified.
@@ -418,13 +462,14 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
     mood_set = {m.lower() for m in (filters.get("moods") or [])}
     has_artist_filter = bool(filters.get("artists"))
     use_buckets = not popularity_order and not has_artist_filter
+    exact_expr, exact_params = _artist_exact_order(filters)
 
     rows: list[sqlite3.Row] = []
     if popularity_order:
-        sql_params = list(params) + [limit * 3]
+        sql_params = list(params) + exact_params + [limit * 3]
         rows = db.execute(
             f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} "
-            f"ORDER BY COALESCE(popularity, 0) DESC LIMIT ?",
+            f"ORDER BY {exact_expr}COALESCE(popularity, 0) DESC LIMIT ?",
             sql_params,
         ).fetchall()
     elif use_buckets:
@@ -432,20 +477,23 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         # per-artist cap. The final selection loop below enforces proportional
         # representation using bucket_quotas — without that step, the first
         # bucket's rows would fill the `limit` before mid/niche get a chance.
+        # When a mood filter is active, widen the fetch so the Python mood re-rank
+        # has more to work with (mood confidence can't be ordered in SQL).
+        fetch_mult = 5 if mood_set else 3
         for _name, share, bucket_clause in _BUCKET_SHARES:
-            bucket_limit = max(20, round(limit * share * 3))
+            bucket_limit = max(20, round(limit * share * fetch_mult))
             bucket_sql = (
                 f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} AND ({bucket_clause}) "
-                f"ORDER BY (COALESCE(popularity, 10) * 0.6 + ABS(RANDOM()) % 40) DESC "
+                f"ORDER BY (COALESCE(popularity, 10) * 0.6 + {_jitter(40)}) DESC "
                 f"LIMIT ?"
             )
             rows.extend(db.execute(bucket_sql, [*params, bucket_limit]).fetchall())
     else:
         # Artist-specific prompt: single popularity-weighted pass.
-        sql_params = list(params) + [limit * 3]
+        sql_params = list(params) + exact_params + [limit * 3]
         rows = db.execute(
             f"SELECT {_TRACK_COLS} FROM tracks WHERE {where} "
-            f"ORDER BY (COALESCE(popularity, 30) * 0.7 + ABS(RANDOM()) % 30) DESC "
+            f"ORDER BY {exact_expr}(COALESCE(popularity, 30) * 0.7 + {_jitter(30)}) DESC "
             f"LIMIT ?",
             sql_params,
         ).fetchall()
@@ -456,8 +504,8 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
         for t in parsed:
             t["_mood_score"] = _mood_match_score(t, mood_set)
         # Sort by mood score primarily, popularity secondary — keeps the
-        # strongest mood matches at the top of each bucket while still
-        # surfacing popular tracks when mood confidence ties.
+        # strongest mood matches at the top while still surfacing popular
+        # tracks when mood confidence ties.
         parsed.sort(
             key=lambda t: (
                 -(t.get("_mood_score") or 0.0),
@@ -594,147 +642,80 @@ def get_tracks_without_popularity(db: sqlite3.Connection, limit: int = 200) -> l
     return [dict(r) for r in rows]
 
 
-def get_tracks_missing_deezer(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
-    """Get tracks that have been enriched but are missing Deezer data and are due for a retry.
-    Tracks checked in the last 24h with no result are skipped (not found / retry tomorrow)."""
-    rows = db.execute("""
+# --- Per-source enrichment helpers (Deezer / Last.fm / MusicBrainz) ---
+# These three sources share identical query/update shapes, differing only by
+# column. Parameterizing by `source` keeps them in lockstep. `source` is always
+# an internal literal (never user input), so interpolating column names is safe.
+
+_SOURCE_DATA_COL = {
+    "deezer": "deezer_rank",
+    "lastfm": "lastfm_listeners",
+    "musicbrainz": "musicbrainz_rating",
+}
+_SOURCE_CHECKED_COL = {
+    "deezer": "deezer_checked_at",
+    "lastfm": "lastfm_checked_at",
+    "musicbrainz": "musicbrainz_checked_at",
+}
+# Columns SET by each source's reblend writer. The row tuple is always
+# (popularity, <these columns...>, track_id).
+_SOURCE_UPDATE_COLS = {
+    "deezer": ("deezer_rank", "deezer_id", "deezer_checked_at"),
+    "lastfm": ("lastfm_listeners", "lastfm_playcount", "lastfm_checked_at"),
+    "musicbrainz": ("musicbrainz_rating", "musicbrainz_rating_count", "musicbrainz_checked_at"),
+}
+
+
+def get_tracks_missing_source(db: sqlite3.Connection, source: str, limit: int = 500) -> list[dict]:
+    """Get enriched tracks missing `source` data and due for a retry.
+    Tracks checked in the last 24h with no result are skipped (retry tomorrow).
+    Returns all sibling source columns so the popularity score can be reblended."""
+    data_col = _SOURCE_DATA_COL[source]
+    checked_col = _SOURCE_CHECKED_COL[source]
+    rows = db.execute(f"""
         SELECT id, title, artist, track_number,
-               lastfm_listeners, lastfm_playcount,
+               deezer_rank, lastfm_listeners, lastfm_playcount,
                musicbrainz_rating, musicbrainz_rating_count
         FROM tracks
         WHERE popularity IS NOT NULL
-          AND deezer_rank IS NULL
+          AND {data_col} IS NULL
           AND title IS NOT NULL
-          AND (deezer_checked_at IS NULL
-               OR (unixepoch() - deezer_checked_at) > 86400)
-        ORDER BY deezer_checked_at ASC NULLS FIRST, id ASC
+          AND ({checked_col} IS NULL OR (unixepoch() - {checked_col}) > 86400)
+        ORDER BY {checked_col} ASC NULLS FIRST, id ASC
         LIMIT ?
     """, (limit,)).fetchall()
     return [dict(r) for r in rows]
 
 
-def count_tracks_missing_deezer(db: sqlite3.Connection) -> int:
-    """Count enriched tracks that still have no Deezer data and are due for a retry."""
-    row = db.execute("""
+def count_tracks_missing_source(db: sqlite3.Connection, source: str) -> int:
+    """Count enriched tracks that still have no `source` data and are due for a retry."""
+    data_col = _SOURCE_DATA_COL[source]
+    checked_col = _SOURCE_CHECKED_COL[source]
+    row = db.execute(f"""
         SELECT COUNT(*) as cnt FROM tracks
-        WHERE popularity IS NOT NULL AND deezer_rank IS NULL AND title IS NOT NULL
-          AND (deezer_checked_at IS NULL OR (unixepoch() - deezer_checked_at) > 86400)
+        WHERE popularity IS NOT NULL AND {data_col} IS NULL AND title IS NOT NULL
+          AND ({checked_col} IS NULL OR (unixepoch() - {checked_col}) > 86400)
     """).fetchone()
     return row["cnt"]
 
 
-def update_deezer_not_found(db: sqlite3.Connection, track_ids: list[int]):
-    """Mark tracks as checked on Deezer but not found. They won't be retried for 24h."""
+def update_source_not_found(db: sqlite3.Connection, source: str, track_ids: list[int]):
+    """Mark tracks as checked for `source` but not found. They won't be retried for 24h."""
+    if not track_ids:
+        return
+    checked_col = _SOURCE_CHECKED_COL[source]
     now = time.time()
     db.executemany(
-        "UPDATE tracks SET deezer_checked_at = ? WHERE id = ?",
+        f"UPDATE tracks SET {checked_col} = ? WHERE id = ?",
         [(now, tid) for tid in track_ids],
     )
 
 
-def get_tracks_missing_lastfm(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
-    """Get tracks that have been enriched but are missing Last.fm data and are due for a retry.
-    Tracks checked in the last 24h with no result are skipped (not found / retry tomorrow).
-    Returns existing Deezer and MusicBrainz values so the score can be reblended."""
-    rows = db.execute("""
-        SELECT id, title, artist, track_number,
-               deezer_rank, musicbrainz_rating, musicbrainz_rating_count
-        FROM tracks
-        WHERE popularity IS NOT NULL
-          AND lastfm_listeners IS NULL
-          AND title IS NOT NULL
-          AND (lastfm_checked_at IS NULL
-               OR (unixepoch() - lastfm_checked_at) > 86400)
-        ORDER BY lastfm_checked_at ASC NULLS FIRST, id ASC
-        LIMIT ?
-    """, (limit,)).fetchall()
-    return [dict(r) for r in rows]
-
-
-def count_tracks_missing_lastfm(db: sqlite3.Connection) -> int:
-    """Count enriched tracks that still have no Last.fm data and are due for a retry."""
-    row = db.execute("""
-        SELECT COUNT(*) as cnt FROM tracks
-        WHERE popularity IS NOT NULL AND lastfm_listeners IS NULL AND title IS NOT NULL
-          AND (lastfm_checked_at IS NULL OR (unixepoch() - lastfm_checked_at) > 86400)
-    """).fetchone()
-    return row["cnt"]
-
-
-def update_lastfm_not_found(db: sqlite3.Connection, track_ids: list[int]):
-    """Mark tracks as checked on Last.fm but not found. They won't be retried for 24h."""
-    now = time.time()
-    db.executemany(
-        "UPDATE tracks SET lastfm_checked_at = ? WHERE id = ?",
-        [(now, tid) for tid in track_ids],
-    )
-
-
-def get_tracks_missing_musicbrainz(db: sqlite3.Connection, limit: int = 500) -> list[dict]:
-    """Get tracks that have been enriched but are missing MusicBrainz data and are due for a retry.
-    Tracks checked in the last 24h with no result are skipped."""
-    rows = db.execute("""
-        SELECT id, title, artist, track_number,
-               deezer_rank, lastfm_listeners, lastfm_playcount
-        FROM tracks
-        WHERE popularity IS NOT NULL
-          AND musicbrainz_rating IS NULL
-          AND title IS NOT NULL
-          AND (musicbrainz_checked_at IS NULL
-               OR (unixepoch() - musicbrainz_checked_at) > 86400)
-        ORDER BY musicbrainz_checked_at ASC NULLS FIRST, id ASC
-        LIMIT ?
-    """, (limit,)).fetchall()
-    return [dict(r) for r in rows]
-
-
-def count_tracks_missing_musicbrainz(db: sqlite3.Connection) -> int:
-    """Count enriched tracks that still have no MusicBrainz data and are due for a retry."""
-    row = db.execute("""
-        SELECT COUNT(*) as cnt FROM tracks
-        WHERE popularity IS NOT NULL AND musicbrainz_rating IS NULL AND title IS NOT NULL
-          AND (musicbrainz_checked_at IS NULL OR (unixepoch() - musicbrainz_checked_at) > 86400)
-    """).fetchone()
-    return row["cnt"]
-
-
-def update_musicbrainz_not_found(db: sqlite3.Connection, track_ids: list[int]):
-    """Mark tracks as checked on MusicBrainz but not found. They won't be retried for 24h."""
-    now = time.time()
-    db.executemany(
-        "UPDATE tracks SET musicbrainz_checked_at = ? WHERE id = ?",
-        [(now, tid) for tid in track_ids],
-    )
-
-
-def update_musicbrainz_popularity(db: sqlite3.Connection, rows: list[tuple]):
-    """Patch MusicBrainz + reblended popularity for tracks.
-    Each row: (popularity, musicbrainz_rating, musicbrainz_rating_count, musicbrainz_checked_at, track_id)
-    """
-    db.executemany("""
-        UPDATE tracks SET popularity = ?, musicbrainz_rating = ?, musicbrainz_rating_count = ?,
-            musicbrainz_checked_at = ? WHERE id = ?
-    """, rows)
-
-
-def update_lastfm_popularity(db: sqlite3.Connection, rows: list[tuple]):
-    """Patch Last.fm + reblended popularity for tracks that already have other source data.
-    Each row: (popularity, lastfm_listeners, lastfm_playcount, lastfm_checked_at, track_id)
-    """
-    db.executemany("""
-        UPDATE tracks SET popularity = ?, lastfm_listeners = ?, lastfm_playcount = ?,
-            lastfm_checked_at = ? WHERE id = ?
-    """, rows)
-
-
-def update_deezer_popularity(db: sqlite3.Connection, rows: list[tuple]):
-    """Patch Deezer + reblended popularity for tracks that already have other source data.
-    Each row: (popularity, deezer_rank, deezer_id, deezer_checked_at, track_id)
-    """
-    db.executemany("""
-        UPDATE tracks SET popularity = ?, deezer_rank = ?, deezer_id = ?,
-            deezer_checked_at = ? WHERE id = ?
-    """, rows)
+def update_source_popularity(db: sqlite3.Connection, source: str, rows: list[tuple]):
+    """Patch `source` columns + reblended popularity for tracks that already have
+    other source data. Each row: (popularity, <source columns...>, track_id)."""
+    set_cols = ", ".join(f"{c} = ?" for c in ("popularity", *_SOURCE_UPDATE_COLS[source]))
+    db.executemany(f"UPDATE tracks SET {set_cols} WHERE id = ?", rows)
 
 
 def execute_count(db: sqlite3.Connection, sql: str) -> int:
@@ -763,19 +744,6 @@ def reset_popularity(db: sqlite3.Connection):
     """)
     count = db.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title IS NOT NULL").fetchone()["cnt"]
     return count
-
-
-def update_popularity(db: sqlite3.Connection, track_id: int, popularity: int,
-                      lastfm_listeners: int | None = None,
-                      lastfm_playcount: int | None = None,
-                      deezer_rank: int | None = None):
-    """Update popularity data for a single track."""
-    db.execute("""
-        UPDATE tracks
-        SET popularity = ?,
-            lastfm_listeners = ?, lastfm_playcount = ?, deezer_rank = ?
-        WHERE id = ?
-    """, (popularity, lastfm_listeners, lastfm_playcount, deezer_rank, track_id))
 
 
 def bulk_update_popularity(db: sqlite3.Connection, rows: list[tuple]):
@@ -848,10 +816,13 @@ def reset_mood_tags(db: sqlite3.Connection) -> int:
     return count
 
 
-def _parse_scored_tags(tag_string: str) -> list[str]:
+def tag_names(tag_string: str) -> list[str]:
     """Parse a scored tag string like 'happy:0.85, energetic:0.72' into tag names.
     Also handles legacy format without scores (e.g. 'happy, energetic').
-    Splits on ',' and strips whitespace so missing-space variants aren't dropped."""
+    Splits on ',' and strips whitespace so missing-space variants aren't dropped.
+    Shared by the library summaries and the AI engine's compact tag rendering."""
+    if not tag_string:
+        return []
     tags = []
     for part in tag_string.split(","):
         part = part.strip()
@@ -886,31 +857,28 @@ def _parse_scored_tags_with_scores(tag_string: str) -> list[tuple[str, float]]:
     return result
 
 
-def get_mood_tag_summary(db: sqlite3.Connection) -> list[dict]:
-    """Get distinct mood tags with approximate counts.
-    Parses comma-separated mood_tags column (with optional confidence scores) in Python."""
-    rows = db.execute("""
-        SELECT mood_tags FROM tracks
-        WHERE mood_tags IS NOT NULL AND mood_tags != ''
-    """).fetchall()
+def _tag_summary(db: sqlite3.Connection, column: str) -> list[dict]:
+    """Get distinct tags with approximate counts for a mood_tags/theme_tags column.
+    Parses comma-separated values (with optional confidence scores) in Python.
+    `column` is an internal literal, never user input."""
+    rows = db.execute(
+        f"SELECT {column} FROM tracks WHERE {column} IS NOT NULL AND {column} != ''"
+    ).fetchall()
     counts: dict[str, int] = {}
     for r in rows:
-        for tag in _parse_scored_tags(r["mood_tags"]):
+        for tag in tag_names(r[column]):
             counts[tag] = counts.get(tag, 0) + 1
     return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
+
+
+def get_mood_tag_summary(db: sqlite3.Connection) -> list[dict]:
+    """Get distinct mood tags with approximate counts."""
+    return _tag_summary(db, "mood_tags")
 
 
 def get_theme_tag_summary(db: sqlite3.Connection) -> list[dict]:
     """Get distinct theme tags with approximate counts."""
-    rows = db.execute("""
-        SELECT theme_tags FROM tracks
-        WHERE theme_tags IS NOT NULL AND theme_tags != ''
-    """).fetchall()
-    counts: dict[str, int] = {}
-    for r in rows:
-        for tag in _parse_scored_tags(r["theme_tags"]):
-            counts[tag] = counts.get(tag, 0) + 1
-    return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
+    return _tag_summary(db, "theme_tags")
 
 
 # --- Health Check & Cleanup ---

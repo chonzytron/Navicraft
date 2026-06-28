@@ -59,8 +59,8 @@ async def _scheduled_enrichment():
     try:
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
-            missing_deezer = db.count_tracks_missing_deezer(conn)
-            missing_lastfm = db.count_tracks_missing_lastfm(conn)
+            missing_deezer = db.count_tracks_missing_source(conn, "deezer")
+            missing_lastfm = db.count_tracks_missing_source(conn, "lastfm")
 
         if remaining == 0 and missing_deezer == 0 and missing_lastfm == 0:
             return
@@ -223,6 +223,36 @@ def start_scheduler():
         config.timezone,
         "enabled" if config.navicraft_watcher_enabled else "disabled",
         config.navicraft_watcher_interval,
+    )
+
+
+def reschedule_jobs():
+    """Re-apply interval-based triggers after a config change.
+
+    The library-scan and watcher intervals are baked into their triggers at
+    startup; without this, changing them in the Settings UI would have no effect
+    until a restart. (The enabled toggles work at runtime because the job bodies
+    re-read config; only the intervals need an explicit reschedule.)
+    """
+    global _scheduler
+    if not _scheduler or not _scheduler.running:
+        return
+    try:
+        _scheduler.reschedule_job(
+            "library_scan", trigger=IntervalTrigger(hours=config.scan_interval_hours)
+        )
+    except Exception:
+        logger.exception("Failed to reschedule library scan")
+    try:
+        _scheduler.reschedule_job(
+            "navicraft_watcher",
+            trigger=IntervalTrigger(seconds=config.navicraft_watcher_interval),
+        )
+    except Exception:
+        logger.exception("Failed to reschedule playlist watcher")
+    logger.info(
+        "Scheduler rescheduled: scan every %dh, watcher every %ds",
+        config.scan_interval_hours, config.navicraft_watcher_interval,
     )
 
 

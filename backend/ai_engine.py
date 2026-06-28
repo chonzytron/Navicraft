@@ -18,22 +18,9 @@ import logging
 import re
 import httpx
 from config import config
+import database as db
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_scores(tag_string: str) -> str:
-    """Strip confidence scores from scored tag strings for compact AI display.
-    'happy:0.85, energetic:0.72' -> 'happy, energetic'
-    Also handles legacy format without scores."""
-    if not tag_string:
-        return ""
-    parts = []
-    for part in tag_string.split(", "):
-        tag_name = part.split(":")[0].strip()
-        if tag_name:
-            parts.append(tag_name)
-    return ", ".join(parts)
 
 
 # --- Prompts ---
@@ -93,25 +80,40 @@ def _parse_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Find the last top-level JSON object — thinking models may emit
-        # reasoning text before the actual JSON payload
-        last_match = None
-        for match in re.finditer(r"\{", text):
-            start = match.start()
-            try:
-                obj = json.loads(text[start:])
-                last_match = obj
-                break
-            except json.JSONDecodeError:
-                continue
-        # Fallback: grab the largest {...} block
-        if last_match is None:
-            match = re.search(r"\{[\s\S]*\}", text)
-            if match:
-                return json.loads(match.group())
-        if last_match is not None:
-            return last_match
-        raise ValueError(f"Could not parse AI JSON response: {text[:300]}")
+        pass
+
+    # Thinking models may wrap the JSON payload in reasoning prose before and/or
+    # after it. Scan each '{' and use raw_decode, which parses a complete object
+    # even when trailing text follows. Keep the last successful top-level object
+    # (the final answer usually comes after any reasoning).
+    decoder = json.JSONDecoder()
+    last_obj = None
+    for match in re.finditer(r"\{", text):
+        try:
+            obj, _end = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            last_obj = obj
+    if last_obj is not None:
+        return last_obj
+    raise ValueError(f"Could not parse AI JSON response: {text[:300]}")
+
+
+def extract_song_ids(ai_result: dict) -> list[int]:
+    """Pull integer song IDs from a Pass 2 result, supporting both the compact
+    {"song_ids": [...]} format and the legacy {"songs": [{"id": ...}]} format.
+    Non-integer / malformed entries are skipped."""
+    raw = ai_result.get("song_ids")
+    if not raw:
+        raw = [s.get("id") for s in ai_result.get("songs", [])]
+    ids: list[int] = []
+    for r in raw or []:
+        try:
+            ids.append(int(r))
+        except (TypeError, ValueError):
+            continue
+    return ids
 
 
 async def _call_claude(system: str, user_message: str) -> str:
@@ -303,9 +305,8 @@ async def pass2_select_songs(
             parts.append(str(c["bpm"]) if c.get("bpm") else "")
         if include_tags:
             # Merge mood + theme tags into single field, strip confidence scores
-            mood = _strip_scores(c.get("mood_tags") or "")
-            theme = _strip_scores(c.get("theme_tags") or "")
-            parts.append(",".join(filter(None, [mood, theme])))
+            names = db.tag_names(c.get("mood_tags") or "") + db.tag_names(c.get("theme_tags") or "")
+            parts.append(",".join(names))
         if include_pop:
             parts.append(str(c["popularity"]) if c.get("popularity") is not None else "")
         candidate_lines.append(";".join(parts))
@@ -346,6 +347,5 @@ Select {max_songs} songs.{duration_note}{filter_context}
     except (json.JSONDecodeError, ValueError):
         logger.error("Pass 2: failed to parse AI response: %s", text[:500])
         raise ValueError("AI returned an invalid response for Pass 2. Try again.")
-    selected = result.get("song_ids") or result.get("songs", [])
-    logger.info("Pass 2: AI selected %d songs", len(selected))
+    logger.info("Pass 2: AI selected %d songs", len(extract_song_ids(result)))
     return result

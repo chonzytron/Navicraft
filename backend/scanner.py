@@ -5,6 +5,7 @@ and populates the SQLite index. Supports incremental scanning by mtime.
 """
 
 import os
+import re
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -54,6 +55,67 @@ def _safe_float(val, default=None) -> Optional[float]:
         return float(str(val).strip())
     except (ValueError, TypeError):
         return default
+
+
+# --- Comment cleaning --------------------------------------------------------
+# Comments are searched by keyword filters, so machine-written junk (encoder
+# signatures, iTunes/CDDB blobs, ReplayGain/normalization data) is worse than
+# useless — it produces false keyword matches. Filter it out, keep real text.
+
+# COMM frame descriptions written by software, not humans.
+_JUNK_COMMENT_DESC = re.compile(r"(?i)^(itun|cddb|musicmatch|ubertagger|replaygain|waveform|encoder)")
+
+# Distinctive encoder/ripper/normalization tokens that don't occur in genuine
+# human comments. Kept narrow (specific tool/format names + version strings) to
+# avoid dropping real comments that merely contain a common word.
+_JUNK_COMMENT_VALUE = re.compile(
+    r"(?i)(exact audio copy|created by grip|cdparanoia|libebur128|"
+    r"replaygain|itunnorm|\blame\s?\d|\blavf\d|\blavc\d|\bx264\b)"
+)
+
+
+def _looks_like_junk_comment(value) -> bool:
+    v = str(value).strip()
+    if not v:
+        return True
+    if _JUNK_COMMENT_VALUE.search(v):
+        return True
+    # iTunNORM-style normalization blobs: long, entirely hex digits + spaces.
+    compact = v.replace(" ", "")
+    if len(compact) >= 16 and all(c in "0123456789abcdefABCDEF" for c in compact):
+        return True
+    return False
+
+
+def _clean_comment(value) -> Optional[str]:
+    """Return a trimmed human comment, or None if empty/machine-written junk."""
+    if value is None:
+        return None
+    v = str(value).strip()
+    if not v or _looks_like_junk_comment(v):
+        return None
+    return v
+
+
+def _select_comment(frames) -> Optional[str]:
+    """Pick the best human comment from a list of ID3 COMM frames.
+    Skips machine-written frames (iTunes/CDDB/encoder) and junk values; prefers
+    an empty-description English comment, then any acceptable one."""
+    candidates = []
+    for frame in frames or []:
+        desc = getattr(frame, "desc", "") or ""
+        if _JUNK_COMMENT_DESC.match(desc.strip()):
+            continue
+        texts = getattr(frame, "text", None) or []
+        text = _clean_comment(texts[0] if texts else None)
+        if text:
+            lang = (getattr(frame, "lang", "") or "").lower()
+            candidates.append((desc, lang, text))
+    if not candidates:
+        return None
+    # Prefer empty description and English/undefined language.
+    candidates.sort(key=lambda c: (0 if c[0] == "" else 1, 0 if c[1] in ("eng", "xxx", "") else 1))
+    return candidates[0][2]
 
 
 def _extract_genres(audio) -> Optional[str]:
@@ -172,10 +234,8 @@ def _extract_extended_tags(file_path: str, ext: str, meta: dict):
                     val = frame.text[0] if hasattr(frame, 'text') and frame.text else str(frame)
                     meta["mood"] = val
                     break
-            # Comment
-            comm = tags.get("COMM::eng") or tags.get("COMM::'eng'")
-            if comm:
-                meta["comment"] = str(comm)
+            # Comment — scan all COMM frames, skip machine/encoder junk
+            meta["comment"] = _select_comment(tags.getall("COMM"))
             # Label / publisher
             tpub = tags.get("TPUB")
             if tpub and tpub.text:
@@ -197,7 +257,7 @@ def _extract_extended_tags(file_path: str, ext: str, meta: dict):
                 return
             meta["bpm"] = _safe_float(_safe_first(audio, "bpm"))
             meta["mood"] = _safe_first(audio, "mood")
-            meta["comment"] = _safe_first(audio, "comment") or _safe_first(audio, "description")
+            meta["comment"] = _clean_comment(_safe_first(audio, "comment") or _safe_first(audio, "description"))
             meta["label"] = _safe_first(audio, "label") or _safe_first(audio, "publisher")
 
         elif ext in (".ogg",):
@@ -207,7 +267,7 @@ def _extract_extended_tags(file_path: str, ext: str, meta: dict):
                 return
             meta["bpm"] = _safe_float(_safe_first(audio, "bpm"))
             meta["mood"] = _safe_first(audio, "mood")
-            meta["comment"] = _safe_first(audio, "comment")
+            meta["comment"] = _clean_comment(_safe_first(audio, "comment"))
             meta["label"] = _safe_first(audio, "label") or _safe_first(audio, "organization")
 
         elif ext == ".opus":
@@ -217,7 +277,7 @@ def _extract_extended_tags(file_path: str, ext: str, meta: dict):
                 return
             meta["bpm"] = _safe_float(_safe_first(audio, "bpm"))
             meta["mood"] = _safe_first(audio, "mood")
-            meta["comment"] = _safe_first(audio, "comment")
+            meta["comment"] = _clean_comment(_safe_first(audio, "comment"))
 
         elif ext in (".m4a", ".aac", ".mp4"):
             try:
@@ -231,7 +291,7 @@ def _extract_extended_tags(file_path: str, ext: str, meta: dict):
                 meta["bpm"] = _safe_float(tmpo[0])
             comment = tags.get("\xa9cmt")
             if comment:
-                meta["comment"] = comment[0]
+                meta["comment"] = _clean_comment(comment[0])
 
     except Exception as e:
         logger.debug("Extended tag extraction failed for %s: %s", file_path, e)

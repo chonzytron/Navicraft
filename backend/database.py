@@ -5,6 +5,7 @@ Stores rich metadata per track, supports filtering queries for the AI pipeline.
 
 import sqlite3
 import os
+import random
 import re
 import time
 import logging
@@ -316,13 +317,19 @@ def _build_filter_where(filters: dict) -> tuple[str, list]:
         artists = filters["artists"]
         # Token-bounded regex (not substring): "Queen" must not match
         # "Queens of the Stone Age". Exact matches are ranked first in filter_tracks.
-        artist_clauses = " OR ".join(
-            "(artist REGEXP ? OR album_artist REGEXP ?)" for _ in artists
-        )
-        conditions.append(f"({artist_clauses})")
+        # A cheap LIKE pre-check gates the per-row Python regexp so it only runs on
+        # rows that actually contain the term (substring is a necessary condition
+        # for any word-boundary match) — keeps full-table scans fast.
+        clauses = []
         for a in artists:
-            pat = _word_pattern(a)
-            params.extend([pat, pat])
+            like = f"%{a.strip().lower()}%"
+            word = _word_pattern(a)
+            clauses.append(
+                "((LOWER(artist) LIKE ? AND artist REGEXP ?) "
+                "OR (LOWER(album_artist) LIKE ? AND album_artist REGEXP ?))"
+            )
+            params.extend([like, word, like, word])
+        conditions.append("(" + " OR ".join(clauses) + ")")
 
     if filters.get("moods"):
         moods = filters["moods"]
@@ -355,15 +362,16 @@ def _build_filter_where(filters: dict) -> tuple[str, list]:
     if filters.get("exclude_genres"):
         # Token-bounded so excluding "rap" doesn't also drop "trap"; NULL-safe so
         # untagged tracks aren't silently removed by an exclusion (NULL NOT LIKE x
-        # would otherwise evaluate falsey and exclude them).
+        # would otherwise evaluate falsey and exclude them). The NOT LIKE short-
+        # circuits the regexp for rows that don't contain the term at all.
         for eg in filters["exclude_genres"]:
-            conditions.append("(genre IS NULL OR NOT (genre REGEXP ?))")
-            params.append(_word_pattern(eg))
+            conditions.append("(genre IS NULL OR LOWER(genre) NOT LIKE ? OR NOT (genre REGEXP ?))")
+            params.extend([f"%{eg.strip().lower()}%", _word_pattern(eg)])
 
     if filters.get("exclude_artists"):
         for ea in filters["exclude_artists"]:
-            conditions.append("(artist IS NULL OR NOT (artist REGEXP ?))")
-            params.append(_word_pattern(ea))
+            conditions.append("(artist IS NULL OR LOWER(artist) NOT LIKE ? OR NOT (artist REGEXP ?))")
+            params.extend([f"%{ea.strip().lower()}%", _word_pattern(ea)])
 
     if filters.get("exclude_keywords"):
         for ek in filters["exclude_keywords"]:
@@ -577,6 +585,13 @@ def filter_tracks(db: sqlite3.Connection, filters: dict, limit: int = 500,
             results.append(d)
             if len(results) >= limit:
                 break
+
+    # In variety mode the results are concatenated top→mid→niche tier blocks.
+    # Interleave them so Pass 2 doesn't positionally anchor on the popular tier
+    # and can build the intended popular/mid/niche mix. Mood mode keeps its
+    # confidence ordering; popularity/artist modes keep their deliberate order.
+    if use_buckets and not mood_set:
+        random.shuffle(results)
 
     return results
 

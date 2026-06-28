@@ -67,6 +67,13 @@ async def _delete(path: str) -> None:
     await _request("DELETE", path)
 
 
+def reset_cache():
+    """Forget the cached machineIdentifier — call when the Plex URL/token changes
+    so playlist URIs aren't built for a previously configured server."""
+    global _machine_identifier
+    _machine_identifier = None
+
+
 async def _get_machine_identifier() -> str:
     """Fetch and cache the Plex server's machineIdentifier (needed for playlist URIs)."""
     global _machine_identifier

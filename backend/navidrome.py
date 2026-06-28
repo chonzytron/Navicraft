@@ -14,47 +14,55 @@ import database as db
 logger = logging.getLogger(__name__)
 
 
-def _subsonic_params() -> dict:
+def _auth_params() -> list[tuple]:
+    """Subsonic auth params as a list of tuples (so repeated keys like songId work)."""
     salt = secrets.token_hex(8)
     token = hashlib.md5((config.navidrome_password + salt).encode()).hexdigest()
-    return {
-        "u": config.navidrome_user,
-        "t": token,
-        "s": salt,
-        "v": "1.16.1",
-        "c": "navicraft",
-        "f": "json",
-    }
+    return [
+        ("u", config.navidrome_user),
+        ("t", token),
+        ("s", salt),
+        ("v", "1.16.1"),
+        ("c", "navicraft"),
+        ("f", "json"),
+    ]
 
 
 def _api_url(endpoint: str) -> str:
     return f"{config.navidrome_url.rstrip('/')}/rest/{endpoint}"
 
 
-async def _get(endpoint: str, params: dict = None) -> dict:
-    all_params = _subsonic_params()
-    if params:
-        all_params.update(params)
+async def _request(endpoint: str, params: list[tuple]) -> dict:
+    """GET a Subsonic endpoint with retry/backoff. `params` is a list of tuples
+    (fresh auth params + endpoint args). Returns the subsonic-response dict."""
     max_retries = 3
+    data = None
     for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.get(_api_url(endpoint), params=all_params)
+                resp = await client.get(_api_url(endpoint), params=params)
                 resp.raise_for_status()
                 data = resp.json()
             break
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
             if attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)
-                logger.warning("Navidrome request failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
+                logger.warning("Navidrome %s failed (%s: %s), retrying in %ds", endpoint, type(e).__name__, e, wait)
                 await asyncio.sleep(wait)
             else:
                 raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
-    sr = data.get("subsonic-response", {})
+    sr = (data or {}).get("subsonic-response", {})
     if sr.get("status") != "ok":
         error = sr.get("error", {})
         raise Exception(f"Subsonic error: {error.get('message', 'Unknown')}")
     return sr
+
+
+async def _get(endpoint: str, params: dict = None) -> dict:
+    all_params = _auth_params()
+    if params:
+        all_params.extend(params.items())
+    return await _request(endpoint, all_params)
 
 
 async def test_connection() -> dict:
@@ -155,41 +163,8 @@ async def sync_navidrome_ids():
 
 async def create_playlist(name: str, song_ids: list[str]) -> dict:
     """Create a playlist in Navidrome. song_ids are Navidrome IDs."""
-    salt = secrets.token_hex(8)
-    token = hashlib.md5((config.navidrome_password + salt).encode()).hexdigest()
-
-    query_params = [
-        ("u", config.navidrome_user),
-        ("t", token),
-        ("s", salt),
-        ("v", "1.16.1"),
-        ("c", "navicraft"),
-        ("f", "json"),
-        ("name", name),
-    ]
-    for sid in song_ids:
-        query_params.append(("songId", sid))
-
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.get(_api_url("createPlaylist"), params=query_params)
-                resp.raise_for_status()
-                data = resp.json()
-            break
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            if attempt < 2:
-                wait = 2 ** (attempt + 1)
-                logger.warning("Playlist create failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
-                await asyncio.sleep(wait)
-            else:
-                raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
-
-    sr = data.get("subsonic-response", {})
-    if sr.get("status") != "ok":
-        error = sr.get("error", {})
-        raise Exception(f"Failed to create playlist: {error.get('message')}")
-
+    params = _auth_params() + [("name", name)] + [("songId", sid) for sid in song_ids]
+    sr = await _request("createPlaylist", params)
     playlist = sr.get("playlist", {})
     return {
         "id": playlist.get("id", ""),
@@ -214,48 +189,12 @@ async def get_playlists() -> list[dict]:
 
 async def update_playlist(playlist_id: str, name: str = None, song_ids_to_add: list[str] = None) -> dict:
     """Update a playlist in Navidrome — rename and/or add songs."""
-    salt = secrets.token_hex(8)
-    token = hashlib.md5((config.navidrome_password + salt).encode()).hexdigest()
-
-    query_params = [
-        ("u", config.navidrome_user),
-        ("t", token),
-        ("s", salt),
-        ("v", "1.16.1"),
-        ("c", "navicraft"),
-        ("f", "json"),
-        ("playlistId", playlist_id),
-    ]
+    params = _auth_params() + [("playlistId", playlist_id)]
     if name:
-        query_params.append(("name", name))
+        params.append(("name", name))
     if song_ids_to_add:
-        for sid in song_ids_to_add:
-            query_params.append(("songIdToAdd", sid))
-
-    data = None
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.get(_api_url("updatePlaylist"), params=query_params)
-                resp.raise_for_status()
-                data = resp.json()
-            break
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            if attempt < 2:
-                wait = 2 ** (attempt + 1)
-                logger.warning("Playlist update failed (%s: %s), retrying in %ds", type(e).__name__, e, wait)
-                await asyncio.sleep(wait)
-            else:
-                raise ConnectionError(f"Cannot reach Navidrome at {config.navidrome_url}: {type(e).__name__}")
-
-    if data is None:
-        raise Exception("Failed to update playlist: no response received")
-
-    sr = data.get("subsonic-response", {})
-    if sr.get("status") != "ok":
-        error = sr.get("error", {})
-        raise Exception(f"Failed to update playlist: {error.get('message')}")
-
+        params += [("songIdToAdd", sid) for sid in song_ids_to_add]
+    await _request("updatePlaylist", params)
     return {"status": "ok", "id": playlist_id}
 
 

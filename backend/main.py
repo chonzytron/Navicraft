@@ -230,6 +230,9 @@ async def update_config(body: dict):
     # nothing until a restart).
     if "scan_interval_hours" in body or "navicraft_watcher_interval" in body:
         sched.reschedule_jobs()
+    # The Plex machineIdentifier is cached per-server; drop it if the server changed.
+    if "plex_url" in body or "plex_token" in body:
+        plex.reset_cache()
     return {"status": "ok", "config": config.get_editable()}
 
 

@@ -56,6 +56,28 @@ def _safe_float(val, default=None) -> Optional[float]:
         return default
 
 
+def _extract_genres(audio) -> Optional[str]:
+    """Collect ALL genres on a track (mutagen returns a list for multi-valued
+    tags), split any that pack several into one string, dedupe case-insensitively
+    (first-seen casing wins), and join with '; '. Returns None when untagged.
+
+    Storing every genre — not just the first — lets a track tagged
+    "Rock; Alternative" match both an "alternative" and a "rock" prompt, and
+    surfaces both in the genre list given to Pass 1."""
+    raw = audio.get("genre")
+    if not raw:
+        return None
+    if not isinstance(raw, list):
+        raw = [raw]
+    seen: dict[str, str] = {}
+    for item in raw:
+        for g in db.split_genres(str(item)):
+            key = g.lower()
+            if key not in seen:
+                seen[key] = g
+    return "; ".join(seen.values()) or None
+
+
 def _extract_metadata(file_path: str) -> Optional[dict]:
     """
     Extract rich metadata from a music file using mutagen.
@@ -82,7 +104,7 @@ def _extract_metadata(file_path: str) -> Optional[dict]:
             "artist": _safe_first(audio, "artist"),
             "album_artist": _safe_first(audio, "albumartist") or _safe_first(audio, "album_artist"),
             "album": _safe_first(audio, "album"),
-            "genre": _safe_first(audio, "genre"),
+            "genre": _extract_genres(audio),
             "year": None,
             "track_number": None,
             "disc_number": None,

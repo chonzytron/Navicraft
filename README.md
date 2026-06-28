@@ -273,7 +273,7 @@ In **any** Subsonic-compatible client (Navidrome web UI, Feishin, Symfonium, Aon
 NaviCraft reads tags directly from your files using `mutagen`:
 
 - Title, Artist, Album Artist, Album
-- Genre, Year, Track / Disc number
+- Genre (all genres on a track, not just the first), Year, Track / Disc number
 - Duration, BPM, Sample rate, Bitrate
 - Composer, Mood, Comment, Label
 - File format, path, size
@@ -357,7 +357,7 @@ The response is an SSE stream: `progress` events for each phase, then a `result`
 
 ## Tips
 
-- **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer. Enable mood/theme scanning in Settings to auto-tag tracks via audio analysis.
+- **Tag your music well.** Genre and year are the most impactful tags for playlist quality. BPM and mood help too but are rarer. Enable mood/theme scanning in Settings to auto-tag tracks via audio analysis. Multi-genre tags (e.g. `Rock; Alternative`) are all indexed, so a track matches any of its genres — tracks indexed before this was added pick up their extra genres on the next full rescan.
 - **Deezer and MusicBrainz work out of the box.** No API keys needed. Add a Last.fm key for even better popularity data.
 - **Use negative filters.** "Jazz but NOT smooth jazz" or "Electronic without EDM" works — the AI extracts exclusions and applies them at the SQL query stage.
 - **Keywords work too.** Prompts like "greatest hits" or "songs about love" extract keywords that match against song titles, albums, and comments.

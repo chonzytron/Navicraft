@@ -245,16 +245,41 @@ def get_library_stats(db: sqlite3.Connection) -> dict:
     return dict(row)
 
 
+# Genre field separators. Tracks can carry several genres; we split on ';', '/'
+# and null bytes — but NOT commas, since some single genres contain them
+# (e.g. Discogs's "Folk, World, & Country" or "Stage & Screen").
+_GENRE_SEP = re.compile(r"[;/\x00]+")
+
+
+def split_genres(value: str | None) -> list[str]:
+    """Split a stored/raw genre field into individual genre names (whitespace
+    stripped, empties dropped). The single source of truth for genre tokenizing,
+    used by both the scanner (at index time) and the genre summary."""
+    if not value:
+        return []
+    return [g.strip() for g in _GENRE_SEP.split(value) if g.strip()]
+
+
 def get_genres(db: sqlite3.Connection) -> list[dict]:
-    """Get all genres with song counts."""
-    rows = db.execute("""
-        SELECT genre, COUNT(*) as count
-        FROM tracks
-        WHERE genre IS NOT NULL AND genre != ''
-        GROUP BY genre
-        ORDER BY count DESC
-    """).fetchall()
-    return [dict(r) for r in rows]
+    """Get all genres with song counts.
+
+    A track may be tagged with multiple genres (stored joined in the `genre`
+    column), so we split and count each individually in Python — a track tagged
+    "Rock; Alternative" contributes to both. Mirrors get_mood_tag_summary."""
+    rows = db.execute(
+        "SELECT genre FROM tracks WHERE genre IS NOT NULL AND genre != ''"
+    ).fetchall()
+    counts: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for r in rows:
+        for g in split_genres(r["genre"]):
+            key = g.lower()
+            counts[key] = counts.get(key, 0) + 1
+            display.setdefault(key, g)
+    return [
+        {"genre": display[k], "count": c}
+        for k, c in sorted(counts.items(), key=lambda x: -x[1])
+    ]
 
 
 def get_top_artists(db: sqlite3.Connection, limit: int = 200) -> list[dict]:

@@ -103,16 +103,21 @@ def _parse_json(text: str) -> dict:
 def extract_song_ids(ai_result: dict) -> list[int]:
     """Pull integer song IDs from a Pass 2 result, supporting both the compact
     {"song_ids": [...]} format and the legacy {"songs": [{"id": ...}]} format.
-    Non-integer / malformed entries are skipped."""
+    Non-integer / malformed entries are skipped, and duplicates are dropped
+    (order preserved) so a repeated ID can't put the same track in a playlist twice."""
     raw = ai_result.get("song_ids")
     if not raw:
         raw = [s.get("id") for s in ai_result.get("songs", [])]
     ids: list[int] = []
+    seen: set[int] = set()
     for r in raw or []:
         try:
-            ids.append(int(r))
+            v = int(r)
         except (TypeError, ValueError):
             continue
+        if v not in seen:
+            seen.add(v)
+            ids.append(v)
     return ids
 
 

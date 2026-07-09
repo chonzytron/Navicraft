@@ -54,7 +54,10 @@ async def _lookup_deezer(client: httpx.AsyncClient, artist: str, title: str) -> 
     No authentication needed — the Deezer API is free.
     """
     try:
-        query = f'artist:"{artist}" track:"{title}"'
+        # Strip embedded double quotes — they would break the quoted query syntax.
+        q_artist = artist.replace('"', "")
+        q_title = title.replace('"', "")
+        query = f'artist:"{q_artist}" track:"{q_title}"'
         resp = await client.get(
             DEEZER_SEARCH_URL,
             params={"q": query, "limit": 5},
@@ -85,11 +88,10 @@ async def _lookup_deezer(client: httpx.AsyncClient, artist: str, title: str) -> 
                     "deezer_id": str(track.get("id", "")),
                 }
 
-        # Fallback to first result
-        return {
-            "rank": tracks[0].get("rank", 0),
-            "deezer_id": str(tracks[0].get("id", "")),
-        }
+        # No result matched the artist — report not-found rather than inheriting
+        # some other artist's rank, which would poison the popularity score for
+        # exactly the obscure tracks that should score low.
+        return {"not_found": True}
 
     except (httpx.HTTPStatusError, ValueError, KeyError) as e:
         logger.debug("Deezer lookup failed for '%s - %s': %s", artist, title, e)
@@ -147,7 +149,10 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
     Must include a descriptive User-Agent header per their API terms.
     """
     try:
-        query = f'recording:"{title}" AND artist:"{artist}"'
+        # Strip embedded double quotes — they would break the Lucene query syntax.
+        q_artist = artist.replace('"', "")
+        q_title = title.replace('"', "")
+        query = f'recording:"{q_title}" AND artist:"{q_artist}"'
         resp = await client.get(
             f"{MUSICBRAINZ_BASE}/recording",
             params={"query": query, "limit": 5, "fmt": "json"},
@@ -176,7 +181,9 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
                 break
 
         if not best:
-            best = recordings[0]
+            # No recording matched the artist — a stranger's rating is worse
+            # than no rating (it would skew the blended popularity score).
+            return {"not_found": True}
 
         rating_obj = best.get("rating", {})
         rating_value = rating_obj.get("value")  # 0-5 scale or None

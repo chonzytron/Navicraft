@@ -24,6 +24,10 @@ import ai_engine
 
 logger = logging.getLogger("navicraft.generation")
 
+# Minimum seconds between AI generations — shared by the HTTP endpoint's rate
+# limit and the playlist watcher's per-cycle throttle.
+GENERATE_COOLDOWN = 10
+
 
 # --- Popularity mode detection -------------------------------------------
 
@@ -49,12 +53,19 @@ def detect_popularity_mode(prompt: str) -> bool:
 
 
 def apply_popularity_mode(filters: dict, prompt: str) -> bool:
-    """Resolve popularity_mode from AI flag or regex fallback, strip
-    mood/bpm filters when active, and return the final flag.
+    """Resolve popularity_mode, strip mood/bpm filters when active, and
+    return the final flag.
+
+    An explicit true/false from Pass 1 is trusted — the AI sees the full prompt
+    and can tell "best songs for a rainy day" (vibe-heavy) from "best of Queen"
+    (popularity-driven). The regex fallback applies only when the AI response
+    omitted the flag, so a trigger phrase in the prompt can't override an
+    explicit false and strip mood filters the prompt actually wanted.
 
     Mutates `filters` in-place so downstream code sees a cleaned-up dict.
     """
-    popularity_mode = bool(filters.get("popularity_mode")) or detect_popularity_mode(prompt)
+    ai_flag = filters.get("popularity_mode")
+    popularity_mode = bool(ai_flag) if ai_flag is not None else detect_popularity_mode(prompt)
     if popularity_mode:
         filters.pop("moods", None)
         filters.pop("bpm_min", None)

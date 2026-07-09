@@ -46,9 +46,8 @@ _PROCESSED_MAX = 500
 # Guard against overlapping watcher invocations
 _watcher_running = False
 
-# Rate limiting for watcher-triggered AI calls (seconds between generations)
+# Rate limiting for watcher-triggered AI calls (cooldown shared with /api/generate)
 _last_generate_time = 0.0
-_GENERATE_COOLDOWN = 10
 
 # Last watcher run status for the status endpoint
 _watcher_status = {
@@ -222,7 +221,7 @@ async def check_navidrome_playlists():
 
             # Rate limit: wait between AI generations
             now = time.time()
-            if now - _last_generate_time < _GENERATE_COOLDOWN:
+            if now - _last_generate_time < gen.GENERATE_COOLDOWN:
                 logger.info("Watcher: rate limited, skipping '%s' until next cycle", pl_name[:60])
                 continue
 

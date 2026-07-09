@@ -357,14 +357,21 @@ def _build_filter_where(filters: dict) -> tuple[str, list]:
         conditions.append("(" + " OR ".join(clauses) + ")")
 
     if filters.get("moods"):
-        moods = filters["moods"]
-        mood_clauses = " OR ".join(
-            "(LOWER(mood_tags) LIKE ? OR LOWER(theme_tags) LIKE ?)"
-            for _ in moods
-        )
-        conditions.append(f"({mood_clauses})")
-        for m in moods:
-            params.extend([f"%{m.lower()}%", f"%{m.lower()}%"])
+        # Token-bounded like artists: the vocabulary contains proper-substring
+        # pairs ("fun"/"funny", "drama"/"dramatic"), so a plain LIKE would let
+        # wrong-mood tracks into the pool and suppress relaxation. Tags are
+        # stored as "name:score, ..." so the word boundary is clean. Same cheap
+        # LIKE gate as the artist filter keeps the Python regexp off most rows.
+        clauses = []
+        for m in filters["moods"]:
+            like = f"%{m.strip().lower()}%"
+            word = _word_pattern(m)
+            clauses.append(
+                "((LOWER(mood_tags) LIKE ? AND mood_tags REGEXP ?) "
+                "OR (LOWER(theme_tags) LIKE ? AND theme_tags REGEXP ?))"
+            )
+            params.extend([like, word, like, word])
+        conditions.append("(" + " OR ".join(clauses) + ")")
 
     if filters.get("bpm_min"):
         conditions.append("bpm >= ?")
@@ -399,8 +406,11 @@ def _build_filter_where(filters: dict) -> tuple[str, list]:
             params.extend([f"%{ea.strip().lower()}%", _word_pattern(ea)])
 
     if filters.get("exclude_keywords"):
+        # NULL-safe on album (title is guaranteed by the base condition):
+        # NULL NOT LIKE x evaluates to NULL, which would silently exclude
+        # every album-less track from any keyword-exclusion query.
         for ek in filters["exclude_keywords"]:
-            conditions.append("LOWER(title) NOT LIKE ? AND LOWER(album) NOT LIKE ?")
+            conditions.append("(LOWER(title) NOT LIKE ? AND (album IS NULL OR LOWER(album) NOT LIKE ?))")
             params.extend([f"%{ek.lower()}%", f"%{ek.lower()}%"])
 
     return " AND ".join(conditions), params

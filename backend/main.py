@@ -37,9 +37,8 @@ logger = logging.getLogger("navicraft")
 _scan_lock = asyncio.Lock()
 _scan_progress = {"phase": "idle", "current": 0, "total": 0, "message": "", "log": []}
 
-# Rate limiting for /api/generate
+# Rate limiting for /api/generate (cooldown length shared with the watcher)
 _last_generate_time = 0.0
-_GENERATE_COOLDOWN = 10  # seconds
 
 
 def _default_server() -> Optional[str]:
@@ -582,8 +581,8 @@ async def generate_playlist(req: GenerateRequest):
     """Generate a playlist using the two-pass AI strategy. Streams SSE progress events."""
     global _last_generate_time
     now = time.time()
-    if now - _last_generate_time < _GENERATE_COOLDOWN:
-        remaining = int(_GENERATE_COOLDOWN - (now - _last_generate_time))
+    if now - _last_generate_time < gen.GENERATE_COOLDOWN:
+        remaining = int(gen.GENERATE_COOLDOWN - (now - _last_generate_time))
         raise HTTPException(429, detail=f"Please wait {remaining}s before generating again")
     _last_generate_time = now
 

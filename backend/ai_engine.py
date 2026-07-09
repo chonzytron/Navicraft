@@ -251,9 +251,12 @@ async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str
     mood_line = f"Library moods: {mood_coverage}\n" if mood_coverage else ""
     theme_line = f"Library themes: {theme_coverage}\n" if theme_coverage else ""
 
+    # Genres and artist names can legitimately contain commas ("Folk, World, &
+    # Country", "Tyler, The Creator"), so join with "; " to keep the lists
+    # unambiguous for the AI.
     user_msg = f"""Library: {library_summary.get('song_count', 0)} songs, {library_summary.get('artist_count', 0)} artists, years {library_summary.get('year_range', {}).get('min_year', '?')}-{library_summary.get('year_range', {}).get('max_year', '?')}
-Genres: {', '.join(library_summary.get('genres', [])[:60])}
-Artists: {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:40])}
+Genres: {'; '.join(library_summary.get('genres', [])[:60])}
+Artists: {'; '.join(a['artist'] for a in library_summary.get('top_artists', [])[:40])}
 {mood_line}{theme_line}
 Prompt: "{prompt}"
 """
@@ -328,9 +331,9 @@ async def pass2_select_songs(
         if filters.get("popularity_mode"):
             parts.append("popularity_mode: true")
         if filters.get("genres"):
-            parts.append(f"Genres: {', '.join(filters['genres'])}")
+            parts.append(f"Genres: {'; '.join(filters['genres'])}")
         if filters.get("artists"):
-            parts.append(f"Artists: {', '.join(filters['artists'])}")
+            parts.append(f"Artists: {'; '.join(filters['artists'])}")
         if filters.get("moods"):
             parts.append(f"Moods: {', '.join(filters['moods'])}")
         if filters.get("bpm_min") or filters.get("bpm_max"):

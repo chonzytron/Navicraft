@@ -12,15 +12,21 @@ Consolidates logic that was previously duplicated:
 from __future__ import annotations
 
 import logging
+import math
 import re
 import sqlite3
 import time
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from config import config
 import database as db
+import ai_engine
 
 logger = logging.getLogger("navicraft.generation")
+
+# Minimum seconds between AI generations — shared by the HTTP endpoint's rate
+# limit and the playlist watcher's per-cycle throttle.
+GENERATE_COOLDOWN = 10
 
 
 # --- Popularity mode detection -------------------------------------------
@@ -47,12 +53,19 @@ def detect_popularity_mode(prompt: str) -> bool:
 
 
 def apply_popularity_mode(filters: dict, prompt: str) -> bool:
-    """Resolve popularity_mode from AI flag or regex fallback, strip
-    mood/bpm filters when active, and return the final flag.
+    """Resolve popularity_mode, strip mood/bpm filters when active, and
+    return the final flag.
+
+    An explicit true/false from Pass 1 is trusted — the AI sees the full prompt
+    and can tell "best songs for a rainy day" (vibe-heavy) from "best of Queen"
+    (popularity-driven). The regex fallback applies only when the AI response
+    omitted the flag, so a trigger phrase in the prompt can't override an
+    explicit false and strip mood filters the prompt actually wanted.
 
     Mutates `filters` in-place so downstream code sees a cleaned-up dict.
     """
-    popularity_mode = bool(filters.get("popularity_mode")) or detect_popularity_mode(prompt)
+    ai_flag = filters.get("popularity_mode")
+    popularity_mode = bool(ai_flag) if ai_flag is not None else detect_popularity_mode(prompt)
     if popularity_mode:
         filters.pop("moods", None)
         filters.pop("bpm_min", None)
@@ -111,28 +124,74 @@ def invalidate_library_summary():
 # --- Progressive filter relaxation ---------------------------------------
 
 
-def relaxation_steps(filters: dict) -> list[tuple[str, dict]]:
+# Filter keys that actually produce SQL WHERE conditions. Used to compare steps
+# so we never re-run a query identical to the previous step (the raw Pass 1 dict
+# carries many null/empty keys that would defeat a naive equality check).
+_EFFECTIVE_KEYS = (
+    "genres", "year_min", "year_max", "artists", "moods", "bpm_min", "bpm_max",
+    "keywords", "exclude_genres", "exclude_artists", "exclude_keywords",
+)
+_KEEP_NEGATIVE = ("exclude_genres", "exclude_artists", "exclude_keywords")
+
+
+def _effective(filters: dict) -> dict:
+    """Reduce a filter dict to only the keys that change the SQL result."""
+    return {k: filters[k] for k in _EFFECTIVE_KEYS if filters.get(k)}
+
+
+def relaxation_steps(filters: dict, popularity_mode: bool = False) -> list[tuple[str, dict]]:
     """Return the ordered (phase_name, filters) steps to attempt.
 
-    Step 'initial': apply all filters.
-    Step 'relax_mood_bpm': drop moods / bpm / keywords (data-dependent filters
-      most likely to cause emptiness, e.g. when mood scanning hasn't run).
-    Step 'relax_broad': keep only genres + artists + negative filters (drop year range).
-    Step 'relax_all': no filters at all (last-resort fallback).
+    Each step is skipped when its effective filter set matches the previous step,
+    so identical queries are never re-run.
+
+    Popularity mode ("best of" / "top hits"): the decade (year) or named artist IS
+    the request, so we only drop incidental genre/keyword filters and never fall
+    through to an unfiltered query when a defining constraint exists — returning
+    fewer on-theme songs beats returning off-theme popular ones.
+
+    Standard mode order:
+      'initial'        — all filters.
+      'relax_mood_bpm' — drop moods / bpm / keywords (data-dependent, most likely
+                         to be empty, e.g. when mood scanning hasn't run).
+      'relax_keep_era' — when a year range is set, keep the era + artists and drop
+                         genre: staying in the requested decade is usually more
+                         on-theme than the same genre across all eras.
+      'relax_broad'    — genres + artists (+ negatives), drops year.
+      'relax_all'      — no filters (last resort).
     """
     steps: list[tuple[str, dict]] = [("initial", filters)]
 
+    def add(name: str, f: dict):
+        if _effective(f) != _effective(steps[-1][1]):
+            steps.append((name, f))
+
+    if popularity_mode:
+        # The genre / decade / artist IS the request, so keep all of them and only
+        # drop incidental keyword filters (moods/bpm are already stripped upstream).
+        # We never fall through to a fully unfiltered query when a real filter
+        # exists — returning fewer on-theme hits beats off-theme popular ones. If
+        # there's nothing to keep, `add`'s dedupe leaves just the (empty) initial
+        # step, which is already the unfiltered query.
+        keep_keys = ("genres", "year_min", "year_max", "artists", *_KEEP_NEGATIVE)
+        add("relax_incidental", {k: filters[k] for k in keep_keys if filters.get(k)})
+        return steps
+
     if any(filters.get(k) for k in ("moods", "bpm_min", "bpm_max", "keywords")):
-        relaxed = {k: v for k, v in filters.items() if k not in ("moods", "bpm_min", "bpm_max", "keywords")}
-        steps.append(("relax_mood_bpm", relaxed))
+        add("relax_mood_bpm", {
+            k: v for k, v in filters.items()
+            if k not in ("moods", "bpm_min", "bpm_max", "keywords")
+        })
 
-    broad_keys = ("genres", "artists", "exclude_genres", "exclude_artists", "exclude_keywords")
-    broad_filters = {k: filters[k] for k in broad_keys if filters.get(k)}
-    # Only add broad step if it's different from the previous step
-    if not steps or steps[-1][1] != broad_filters:
-        steps.append(("relax_broad", broad_filters))
+    if filters.get("year_min") or filters.get("year_max"):
+        era_keys = ("year_min", "year_max", "artists", *_KEEP_NEGATIVE)
+        add("relax_keep_era", {k: filters[k] for k in era_keys if filters.get(k)})
 
-    steps.append(("relax_all", {}))
+    if filters.get("genres") or filters.get("artists"):
+        broad_keys = ("genres", "artists", *_KEEP_NEGATIVE)
+        add("relax_broad", {k: filters[k] for k in broad_keys if filters.get(k)})
+
+    add("relax_all", {})
     return steps
 
 
@@ -140,33 +199,11 @@ def broadening_message(phase: str, count: int) -> str:
     """Human-readable SSE message for a given relaxation phase."""
     if phase == "relax_mood_bpm":
         return f"Only {count} matches, relaxing mood/tempo filters..."
-    if phase == "relax_broad":
+    if phase == "relax_keep_era":
+        return f"Only {count} matches, keeping the era and broadening genre..."
+    if phase in ("relax_broad", "relax_incidental"):
         return f"Only {count} matches, broadening search..."
     return f"Only {count} matches, dropping all filters..."
-
-
-async def filter_with_relaxation(
-    filters: dict,
-    max_songs: int,
-    effective_limit: int,
-    popularity_mode: bool,
-) -> list[dict]:
-    """Run filter_tracks with progressive relaxation passes.
-    Used by the playlist watcher (no progress events needed).
-    For SSE progress streaming, iterate relaxation_steps() directly.
-    """
-    candidates: list[dict] = []
-    for _phase, step_filters in relaxation_steps(filters):
-        with db.get_db() as conn:
-            candidates = db.filter_tracks(
-                conn, step_filters,
-                limit=effective_limit,
-                max_songs=max_songs,
-                popularity_order=popularity_mode,
-            )
-        if len(candidates) >= max_songs:
-            break
-    return candidates
 
 
 # --- Duration enforcement -----------------------------------------------
@@ -236,3 +273,159 @@ def candidate_limit_for(max_songs: int) -> int:
     so small playlists don't blast Pass 2 with 500 candidates while large
     playlists still get diversity headroom."""
     return min(config.max_candidates, max(max_songs * 5, 150))
+
+
+# Rough average song length (minutes) used to estimate how many songs a
+# duration-targeted playlist needs. Deliberately a little low so we over- rather
+# than under-provision the candidate pool.
+_AVG_SONG_MIN = 3.5
+
+
+def effective_song_count(max_songs: int, target_duration_min: Optional[int]) -> int:
+    """Number of songs to size the candidate pool, Pass 2 target, and per-artist
+    diversity cap around. When a duration is given it overrides the count, so a
+    long playlist (e.g. 300 min) isn't starved by the default 25-song sizing."""
+    if target_duration_min:
+        est = math.ceil(target_duration_min / _AVG_SONG_MIN)
+        return max(max_songs, est)
+    return max_songs
+
+
+# --- Full two-pass generation (shared by HTTP endpoint + watcher) --------
+
+
+async def run_generation(
+    prompt: str,
+    max_songs: int,
+    target_duration_min: Optional[int] = None,
+    provider: Optional[str] = None,
+) -> AsyncIterator[tuple[str, dict]]:
+    """Run the complete two-pass generation pipeline.
+
+    Async generator yielding ("progress", data) events as each phase completes,
+    and finally ("result", data) with the selected songs. Both the /api/generate
+    SSE endpoint and the Navidrome watcher drive this — the endpoint forwards the
+    progress events as SSE; the watcher ignores them and keeps the result.
+
+    Raises ValueError on unrecoverable problems (empty library, unparseable Pass 2).
+    """
+    yield "progress", {"phase": "pass1", "message": "Analyzing your prompt..."}
+
+    library_summary = get_library_summary()
+    if library_summary.get("song_count", 0) == 0:
+        raise ValueError("Library index is empty. Run a scan first.")
+
+    filters = await ai_engine.pass1_extract_intent(prompt, library_summary, provider)
+
+    # Trust the AI's popularity_mode flag; fall back to regex on the raw prompt.
+    popularity_mode = apply_popularity_mode(filters, prompt)
+    if popularity_mode:
+        logger.info("Popularity mode active — mood/bpm filters stripped")
+
+    yield "progress", {
+        "phase": "pass1_done",
+        "message": "Intent extracted",
+        "filters": {
+            "genres": filters.get("genres") or [],
+            "artists": filters.get("artists") or [],
+            "moods": filters.get("moods") or [],
+            "year_min": filters.get("year_min"),
+            "year_max": filters.get("year_max"),
+            "bpm_min": filters.get("bpm_min"),
+            "bpm_max": filters.get("bpm_max"),
+            "keywords": filters.get("keywords") or [],
+            "exclude_genres": filters.get("exclude_genres") or [],
+            "exclude_artists": filters.get("exclude_artists") or [],
+            "exclude_keywords": filters.get("exclude_keywords") or [],
+            "popularity_mode": popularity_mode,
+        },
+    }
+
+    yield "progress", {"phase": "filtering", "message": "Searching library..."}
+
+    eff_songs = effective_song_count(max_songs, target_duration_min)
+    effective_limit = candidate_limit_for(eff_songs)
+
+    candidates: list[dict] = []
+    for phase_name, step_filters in relaxation_steps(filters, popularity_mode):
+        if phase_name != "initial":
+            yield "progress", {
+                "phase": "broadening",
+                "message": broadening_message(phase_name, len(candidates)),
+            }
+        with db.get_db() as conn:
+            candidates = db.filter_tracks(
+                conn, step_filters,
+                limit=effective_limit,
+                max_songs=eff_songs,
+                popularity_order=popularity_mode,
+            )
+        if len(candidates) >= eff_songs:
+            break
+
+    logger.info("Sending %d candidates to Pass 2", len(candidates))
+
+    # Candidate-pool preview: which artists/tracks are heading into Pass 2.
+    seen_artists: set[str] = set()
+    sample_artists: list[str] = []
+    for c in candidates:
+        a = (c.get("artist") or "").strip()
+        if not a or a.lower() in seen_artists:
+            continue
+        seen_artists.add(a.lower())
+        sample_artists.append(a)
+        if len(sample_artists) >= 15:
+            break
+    unique_artist_total = len({
+        (c.get("artist") or "").strip().lower()
+        for c in candidates if c.get("artist")
+    })
+    sample_tracks = [
+        {"title": c.get("title") or "", "artist": c.get("artist") or ""}
+        for c in candidates[:6]
+    ]
+    yield "progress", {
+        "phase": "filtering_done",
+        "message": f"Found {len(candidates)} candidates",
+        "candidates_found": len(candidates),
+        "unique_artists": unique_artist_total,
+        "sample_artists": sample_artists,
+        "sample_tracks": sample_tracks,
+    }
+
+    yield "progress", {"phase": "pass2", "message": f"Selecting from {len(candidates)} candidates..."}
+
+    ai_result = await ai_engine.pass2_select_songs(
+        prompt=prompt,
+        candidates=candidates,
+        max_songs=eff_songs,
+        provider=provider,
+        target_duration_min=target_duration_min,
+        filters=filters,
+    )
+
+    song_ids = ai_engine.extract_song_ids(ai_result)
+    yield "progress", {
+        "phase": "pass2_done",
+        "message": f"AI selected {len(song_ids)} songs",
+        "selected_count": len(song_ids),
+        "playlist_name": ai_result.get("name") or "",
+    }
+
+    candidate_map = {c["id"]: c for c in candidates}
+    matched_songs = [candidate_map[sid] for sid in song_ids if sid in candidate_map]
+
+    matched_songs, total_duration = enforce_duration(
+        matched_songs, candidates, target_duration_min
+    )
+
+    yield "result", {
+        "name": ai_result.get("name") or "AI Playlist",
+        "description": ai_result.get("description", ""),
+        "songs": matched_songs,
+        "total_duration": round(total_duration),
+        "total_suggested": len(song_ids),
+        "candidates_found": len(candidates),
+        "filters": filters,
+        "popularity_mode": popularity_mode,
+    }

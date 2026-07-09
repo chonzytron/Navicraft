@@ -54,7 +54,10 @@ async def _lookup_deezer(client: httpx.AsyncClient, artist: str, title: str) -> 
     No authentication needed — the Deezer API is free.
     """
     try:
-        query = f'artist:"{artist}" track:"{title}"'
+        # Strip embedded double quotes — they would break the quoted query syntax.
+        q_artist = artist.replace('"', "")
+        q_title = title.replace('"', "")
+        query = f'artist:"{q_artist}" track:"{q_title}"'
         resp = await client.get(
             DEEZER_SEARCH_URL,
             params={"q": query, "limit": 5},
@@ -85,11 +88,10 @@ async def _lookup_deezer(client: httpx.AsyncClient, artist: str, title: str) -> 
                     "deezer_id": str(track.get("id", "")),
                 }
 
-        # Fallback to first result
-        return {
-            "rank": tracks[0].get("rank", 0),
-            "deezer_id": str(tracks[0].get("id", "")),
-        }
+        # No result matched the artist — report not-found rather than inheriting
+        # some other artist's rank, which would poison the popularity score for
+        # exactly the obscure tracks that should score low.
+        return {"not_found": True}
 
     except (httpx.HTTPStatusError, ValueError, KeyError) as e:
         logger.debug("Deezer lookup failed for '%s - %s': %s", artist, title, e)
@@ -147,7 +149,10 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
     Must include a descriptive User-Agent header per their API terms.
     """
     try:
-        query = f'recording:"{title}" AND artist:"{artist}"'
+        # Strip embedded double quotes — they would break the Lucene query syntax.
+        q_artist = artist.replace('"', "")
+        q_title = title.replace('"', "")
+        query = f'recording:"{q_title}" AND artist:"{q_artist}"'
         resp = await client.get(
             f"{MUSICBRAINZ_BASE}/recording",
             params={"query": query, "limit": 5, "fmt": "json"},
@@ -176,7 +181,9 @@ async def _lookup_musicbrainz(client: httpx.AsyncClient, artist: str, title: str
                 break
 
         if not best:
-            best = recordings[0]
+            # No recording matched the artist — a stranger's rating is worse
+            # than no rating (it would skew the blended popularity score).
+            return {"not_found": True}
 
         rating_obj = best.get("rating", {})
         rating_value = rating_obj.get("value")  # 0-5 scale or None
@@ -364,6 +371,110 @@ def _blend_scores(deezer: dict | None, lastfm: dict | None,
     return max(0, min(100, round(blended)))
 
 
+# --- Reblend helpers: rebuild a source dict from already-stored track columns ---
+
+def _deezer_from_track(track: dict) -> dict | None:
+    if track.get("deezer_rank") is None:
+        return None
+    return {"rank": track["deezer_rank"]}
+
+
+def _lastfm_from_track(track: dict) -> dict | None:
+    if track.get("lastfm_listeners") is None:
+        return None
+    return {"listeners": track["lastfm_listeners"], "playcount": track.get("lastfm_playcount")}
+
+
+def _mb_from_track(track: dict) -> dict | None:
+    if track.get("musicbrainz_rating") is None:
+        return None
+    return {"rating": track["musicbrainz_rating"], "rating_count": track.get("musicbrainz_rating_count", 0)}
+
+
+def _deezer_make_row(track: dict, raw: dict, now: float) -> tuple[int, tuple]:
+    pop = _blend_scores(raw, _lastfm_from_track(track), track.get("track_number"), _mb_from_track(track))
+    return pop, (pop, raw["rank"], raw.get("deezer_id"), now, track["id"])
+
+
+def _lastfm_make_row(track: dict, raw: dict, now: float) -> tuple[int, tuple]:
+    pop = _blend_scores(_deezer_from_track(track), raw, track.get("track_number"), _mb_from_track(track))
+    return pop, (pop, raw.get("listeners"), raw.get("playcount"), now, track["id"])
+
+
+def _mb_make_row(track: dict, raw: dict, now: float) -> tuple[int, tuple]:
+    pop = _blend_scores(_deezer_from_track(track), _lastfm_from_track(track), track.get("track_number"), raw)
+    return pop, (pop, raw["rating"], raw.get("rating_count", 0), now, track["id"])
+
+
+async def _run_topup_pass(client, source, lookup, delay, make_row,
+                          *, rate_limit="none", batch_size=500, write_batch=50) -> int:
+    """Fill in tracks that were enriched but are missing one source's data.
+
+    The three sources share this loop, differing only in their lookup function,
+    rate-limit handling, and the row they write:
+      rate_limit="slow"  — retry once after 5s, then slow the request rate (Deezer).
+      rate_limit="break" — retry once after 5s, then stop the pass (MusicBrainz, 1 req/s).
+      rate_limit="none"  — the lookup handles 429s itself and returns None (Last.fm).
+    """
+    with db.get_db() as conn:
+        missing = db.get_tracks_missing_source(conn, source, limit=batch_size)
+    if not missing:
+        return 0
+
+    logger.info("Popularity: %s top-up — %d tracks missing %s data", source, len(missing), source)
+    pending: list[tuple] = []
+    not_found_ids: list[int] = []
+    updated = 0
+    cur_delay = delay
+
+    def flush():
+        if pending:
+            with db.get_db() as conn:
+                db.update_source_popularity(conn, source, pending)
+            pending.clear()
+
+    for track in missing:
+        artist = track.get("artist", "")
+        title = track.get("title", "")
+        if not artist or not title:
+            continue
+
+        raw = await lookup(client, artist, title)
+        if raw and raw.get("rate_limited"):
+            logger.info("Popularity: %s top-up rate limited — waiting 5s before retry", source)
+            await asyncio.sleep(5)
+            raw = await lookup(client, artist, title)
+            still_limited = bool(raw and raw.get("rate_limited"))
+            if rate_limit == "break" and still_limited:
+                logger.warning("Popularity: %s still rate limited during top-up — stopping", source)
+                break
+            if rate_limit == "slow":
+                cur_delay = DEEZER_SLOWDOWN_DELAY
+
+        await asyncio.sleep(cur_delay)
+
+        if raw is None:
+            continue  # network/API error — retry next batch, don't mark
+        if raw.get("not_found"):
+            not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
+            continue
+        if raw.get("rate_limited"):
+            continue  # couldn't resolve this one — leave for next batch
+
+        _pop, row = make_row(track, raw, time.time())
+        pending.append(row)
+        updated += 1
+        if len(pending) >= write_batch:
+            flush()
+
+    if not_found_ids:
+        with db.get_db() as conn:
+            db.update_source_not_found(conn, source, not_found_ids)
+    flush()
+    logger.info("Popularity: %s top-up done — %d tracks updated", source, updated)
+    return updated
+
+
 async def enrich_popularity(batch_size: int = 500):
     """
     Fetch popularity scores for tracks that don't have one yet.
@@ -502,224 +613,30 @@ async def enrich_popularity(batch_size: int = 500):
 
                 flush_pending()  # write any remaining tracks
 
-            # --- Deezer top-up pass ---
-            # Fill in tracks enriched without Deezer data (e.g. during a prior rate limit).
-            deezer_topup = 0
-            with db.get_db() as conn:
-                missing_deezer = db.get_tracks_missing_deezer(conn, limit=batch_size)
-
-            if missing_deezer:
-                logger.info("Popularity: Deezer top-up — %d tracks missing Deezer data", len(missing_deezer))
-                topup_pending: list[tuple] = []
-                not_found_ids: list[int] = []
-                topup_delay = DEEZER_DELAY
-
-                for track in missing_deezer:
-                    artist = track.get("artist", "")
-                    title = track.get("title", "")
-                    if not artist or not title:
-                        continue
-
-                    raw = await _lookup_deezer(client, artist, title)
-
-                    if raw and raw.get("rate_limited"):
-                        logger.info("Popularity: Deezer top-up rate limited — waiting 5s before retry")
-                        await asyncio.sleep(5)
-                        raw = await _lookup_deezer(client, artist, title)
-                        if raw and raw.get("rate_limited"):
-                            logger.warning("Popularity: Deezer still rate limited during top-up — slowing down")
-                            topup_delay = DEEZER_SLOWDOWN_DELAY
-                        else:
-                            topup_delay = DEEZER_SLOWDOWN_DELAY
-
-                    await asyncio.sleep(topup_delay)
-
-                    if raw is None:
-                        continue  # network/API error — retry next batch, don't mark
-
-                    if raw.get("not_found"):
-                        not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
-                        continue
-
-                    # Reblend with existing Last.fm + MusicBrainz data
-                    lastfm_result = None
-                    if track.get("lastfm_listeners") is not None:
-                        lastfm_result = {
-                            "listeners": track["lastfm_listeners"],
-                            "playcount": track.get("lastfm_playcount"),
-                        }
-                    mb_result = None
-                    if track.get("musicbrainz_rating") is not None:
-                        mb_result = {
-                            "rating": track["musicbrainz_rating"],
-                            "rating_count": track.get("musicbrainz_rating_count", 0),
-                        }
-
-                    new_popularity = _blend_scores(raw, lastfm_result, track.get("track_number"), mb_result)
-                    topup_pending.append((
-                        new_popularity, raw["rank"], raw.get("deezer_id"), time.time(), track["id"]
-                    ))
-                    deezer_topup += 1
-
-                    if len(topup_pending) >= WRITE_BATCH:
-                        with db.get_db() as conn:
-                            db.update_deezer_popularity(conn, topup_pending)
-                        topup_pending.clear()
-
-                if not_found_ids:
-                    with db.get_db() as conn:
-                        db.update_deezer_not_found(conn, not_found_ids)
-
-                if topup_pending:
-                    with db.get_db() as conn:
-                        db.update_deezer_popularity(conn, topup_pending)
-
-                logger.info("Popularity: Deezer top-up done — %d tracks updated", deezer_topup)
-
-            # --- Last.fm top-up pass ---
-            # Fill in tracks that are missing Last.fm data (e.g. enriched when Last.fm was down,
-            # or newly added tracks that got Deezer data but no Last.fm yet).
-            lastfm_topup = 0
+            # --- Top-up passes ---
+            # Fill in tracks enriched without one source's data (e.g. during a
+            # prior rate limit, or newly added tracks). One shared driver, three
+            # source specs.
+            await _run_topup_pass(
+                client, "deezer", _lookup_deezer, DEEZER_DELAY, _deezer_make_row,
+                rate_limit="slow", batch_size=batch_size, write_batch=WRITE_BATCH,
+            )
             if has_lastfm:
-                with db.get_db() as conn:
-                    missing_lastfm = db.get_tracks_missing_lastfm(conn, limit=batch_size)
-
-                if missing_lastfm:
-                    logger.info("Popularity: Last.fm top-up — %d tracks missing Last.fm data", len(missing_lastfm))
-                    lastfm_topup_pending: list[tuple] = []
-                    lastfm_not_found_ids: list[int] = []
-
-                    for track in missing_lastfm:
-                        artist = track.get("artist", "")
-                        title = track.get("title", "")
-                        if not artist or not title:
-                            continue
-
-                        raw_lfm = await _lookup_lastfm(client, artist, title)
-                        await asyncio.sleep(LASTFM_DELAY)
-
-                        if raw_lfm is None:
-                            continue  # network/API error — retry next batch, don't mark
-
-                        if raw_lfm.get("not_found"):
-                            lastfm_not_found_ids.append(track["id"])  # confirmed absent, retry tomorrow
-                            continue
-
-                        lastfm_result = raw_lfm
-                        # Reblend with existing Deezer + MusicBrainz data already stored in DB
-                        deezer_result = None
-                        if track.get("deezer_rank") is not None:
-                            deezer_result = {"rank": track["deezer_rank"]}
-                        mb_result = None
-                        if track.get("musicbrainz_rating") is not None:
-                            mb_result = {
-                                "rating": track["musicbrainz_rating"],
-                                "rating_count": track.get("musicbrainz_rating_count", 0),
-                            }
-
-                        new_popularity = _blend_scores(deezer_result, lastfm_result, track.get("track_number"), mb_result)
-                        lastfm_topup_pending.append((
-                            new_popularity,
-                            lastfm_result.get("listeners"),
-                            lastfm_result.get("playcount"),
-                            time.time(),
-                            track["id"],
-                        ))
-                        lastfm_topup += 1
-
-                        if len(lastfm_topup_pending) >= WRITE_BATCH:
-                            with db.get_db() as conn:
-                                db.update_lastfm_popularity(conn, lastfm_topup_pending)
-                            lastfm_topup_pending.clear()
-
-                    if lastfm_not_found_ids:
-                        with db.get_db() as conn:
-                            db.update_lastfm_not_found(conn, lastfm_not_found_ids)
-
-                    if lastfm_topup_pending:
-                        with db.get_db() as conn:
-                            db.update_lastfm_popularity(conn, lastfm_topup_pending)
-
-                    logger.info("Popularity: Last.fm top-up done — %d tracks updated", lastfm_topup)
-
-            # --- MusicBrainz top-up pass ---
-            # Fill in tracks that are missing MusicBrainz data.
-            mb_topup = 0
-            with db.get_db() as conn:
-                missing_mb = db.get_tracks_missing_musicbrainz(conn, limit=batch_size)
-
-            if missing_mb:
-                logger.info("Popularity: MusicBrainz top-up — %d tracks missing MusicBrainz data", len(missing_mb))
-                mb_topup_pending: list[tuple] = []
-                mb_not_found_ids: list[int] = []
-
-                for track in missing_mb:
-                    artist = track.get("artist", "")
-                    title = track.get("title", "")
-                    if not artist or not title:
-                        continue
-
-                    raw_mb = await _lookup_musicbrainz(client, artist, title)
-
-                    if raw_mb and raw_mb.get("rate_limited"):
-                        logger.info("Popularity: MusicBrainz top-up rate limited — waiting 5s before retry")
-                        await asyncio.sleep(5)
-                        raw_mb = await _lookup_musicbrainz(client, artist, title)
-                        if raw_mb and raw_mb.get("rate_limited"):
-                            logger.warning("Popularity: MusicBrainz still rate limited during top-up — stopping")
-                            break
-
-                    await asyncio.sleep(MUSICBRAINZ_DELAY)
-
-                    if raw_mb is None:
-                        continue
-
-                    if raw_mb.get("not_found"):
-                        mb_not_found_ids.append(track["id"])
-                        continue
-
-                    # Reblend with existing Deezer + Last.fm data
-                    deezer_result = None
-                    if track.get("deezer_rank") is not None:
-                        deezer_result = {"rank": track["deezer_rank"]}
-                    lastfm_result = None
-                    if track.get("lastfm_listeners") is not None:
-                        lastfm_result = {
-                            "listeners": track["lastfm_listeners"],
-                            "playcount": track.get("lastfm_playcount"),
-                        }
-
-                    new_popularity = _blend_scores(deezer_result, lastfm_result, track.get("track_number"), raw_mb)
-                    mb_topup_pending.append((
-                        new_popularity,
-                        raw_mb["rating"],
-                        raw_mb.get("rating_count", 0),
-                        time.time(),
-                        track["id"],
-                    ))
-                    mb_topup += 1
-
-                    if len(mb_topup_pending) >= WRITE_BATCH:
-                        with db.get_db() as conn:
-                            db.update_musicbrainz_popularity(conn, mb_topup_pending)
-                        mb_topup_pending.clear()
-
-                if mb_not_found_ids:
-                    with db.get_db() as conn:
-                        db.update_musicbrainz_not_found(conn, mb_not_found_ids)
-
-                if mb_topup_pending:
-                    with db.get_db() as conn:
-                        db.update_musicbrainz_popularity(conn, mb_topup_pending)
-
-                logger.info("Popularity: MusicBrainz top-up done — %d tracks updated", mb_topup)
+                await _run_topup_pass(
+                    client, "lastfm", _lookup_lastfm, LASTFM_DELAY, _lastfm_make_row,
+                    rate_limit="none", batch_size=batch_size, write_batch=WRITE_BATCH,
+                )
+            await _run_topup_pass(
+                client, "musicbrainz", _lookup_musicbrainz, MUSICBRAINZ_DELAY, _mb_make_row,
+                rate_limit="break", batch_size=batch_size, write_batch=WRITE_BATCH,
+            )
 
         # Check remaining
         with db.get_db() as conn:
             remaining = db.count_tracks_without_popularity(conn)
-            missing_deezer_count = db.count_tracks_missing_deezer(conn)
-            missing_lastfm_count = db.count_tracks_missing_lastfm(conn)
-            missing_mb_count = db.count_tracks_missing_musicbrainz(conn)
+            missing_deezer_count = db.count_tracks_missing_source(conn, "deezer")
+            missing_lastfm_count = db.count_tracks_missing_source(conn, "lastfm")
+            missing_mb_count = db.count_tracks_missing_source(conn, "musicbrainz")
 
         logger.info(
             "Popularity enrichment done: %d enriched, %d skipped, %d remaining, "

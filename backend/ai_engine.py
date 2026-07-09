@@ -18,22 +18,9 @@ import logging
 import re
 import httpx
 from config import config
+import database as db
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_scores(tag_string: str) -> str:
-    """Strip confidence scores from scored tag strings for compact AI display.
-    'happy:0.85, energetic:0.72' -> 'happy, energetic'
-    Also handles legacy format without scores."""
-    if not tag_string:
-        return ""
-    parts = []
-    for part in tag_string.split(", "):
-        tag_name = part.split(":")[0].strip()
-        if tag_name:
-            parts.append(tag_name)
-    return ", ".join(parts)
 
 
 # --- Prompts ---
@@ -93,25 +80,45 @@ def _parse_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Find the last top-level JSON object — thinking models may emit
-        # reasoning text before the actual JSON payload
-        last_match = None
-        for match in re.finditer(r"\{", text):
-            start = match.start()
-            try:
-                obj = json.loads(text[start:])
-                last_match = obj
-                break
-            except json.JSONDecodeError:
-                continue
-        # Fallback: grab the largest {...} block
-        if last_match is None:
-            match = re.search(r"\{[\s\S]*\}", text)
-            if match:
-                return json.loads(match.group())
-        if last_match is not None:
-            return last_match
-        raise ValueError(f"Could not parse AI JSON response: {text[:300]}")
+        pass
+
+    # Thinking models may wrap the JSON payload in reasoning prose before and/or
+    # after it. Scan each '{' and use raw_decode, which parses a complete object
+    # even when trailing text follows. Keep the last successful top-level object
+    # (the final answer usually comes after any reasoning).
+    decoder = json.JSONDecoder()
+    last_obj = None
+    for match in re.finditer(r"\{", text):
+        try:
+            obj, _end = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            last_obj = obj
+    if last_obj is not None:
+        return last_obj
+    raise ValueError(f"Could not parse AI JSON response: {text[:300]}")
+
+
+def extract_song_ids(ai_result: dict) -> list[int]:
+    """Pull integer song IDs from a Pass 2 result, supporting both the compact
+    {"song_ids": [...]} format and the legacy {"songs": [{"id": ...}]} format.
+    Non-integer / malformed entries are skipped, and duplicates are dropped
+    (order preserved) so a repeated ID can't put the same track in a playlist twice."""
+    raw = ai_result.get("song_ids")
+    if not raw:
+        raw = [s.get("id") for s in ai_result.get("songs", [])]
+    ids: list[int] = []
+    seen: set[int] = set()
+    for r in raw or []:
+        try:
+            v = int(r)
+        except (TypeError, ValueError):
+            continue
+        if v not in seen:
+            seen.add(v)
+            ids.append(v)
+    return ids
 
 
 async def _call_claude(system: str, user_message: str) -> str:
@@ -244,9 +251,12 @@ async def pass1_extract_intent(prompt: str, library_summary: dict, provider: str
     mood_line = f"Library moods: {mood_coverage}\n" if mood_coverage else ""
     theme_line = f"Library themes: {theme_coverage}\n" if theme_coverage else ""
 
+    # Genres and artist names can legitimately contain commas ("Folk, World, &
+    # Country", "Tyler, The Creator"), so join with "; " to keep the lists
+    # unambiguous for the AI.
     user_msg = f"""Library: {library_summary.get('song_count', 0)} songs, {library_summary.get('artist_count', 0)} artists, years {library_summary.get('year_range', {}).get('min_year', '?')}-{library_summary.get('year_range', {}).get('max_year', '?')}
-Genres: {', '.join(library_summary.get('genres', [])[:60])}
-Artists: {', '.join(a['artist'] for a in library_summary.get('top_artists', [])[:40])}
+Genres: {'; '.join(library_summary.get('genres', [])[:60])}
+Artists: {'; '.join(a['artist'] for a in library_summary.get('top_artists', [])[:40])}
 {mood_line}{theme_line}
 Prompt: "{prompt}"
 """
@@ -303,9 +313,8 @@ async def pass2_select_songs(
             parts.append(str(c["bpm"]) if c.get("bpm") else "")
         if include_tags:
             # Merge mood + theme tags into single field, strip confidence scores
-            mood = _strip_scores(c.get("mood_tags") or "")
-            theme = _strip_scores(c.get("theme_tags") or "")
-            parts.append(",".join(filter(None, [mood, theme])))
+            names = db.tag_names(c.get("mood_tags") or "") + db.tag_names(c.get("theme_tags") or "")
+            parts.append(",".join(names))
         if include_pop:
             parts.append(str(c["popularity"]) if c.get("popularity") is not None else "")
         candidate_lines.append(";".join(parts))
@@ -322,9 +331,9 @@ async def pass2_select_songs(
         if filters.get("popularity_mode"):
             parts.append("popularity_mode: true")
         if filters.get("genres"):
-            parts.append(f"Genres: {', '.join(filters['genres'])}")
+            parts.append(f"Genres: {'; '.join(filters['genres'])}")
         if filters.get("artists"):
-            parts.append(f"Artists: {', '.join(filters['artists'])}")
+            parts.append(f"Artists: {'; '.join(filters['artists'])}")
         if filters.get("moods"):
             parts.append(f"Moods: {', '.join(filters['moods'])}")
         if filters.get("bpm_min") or filters.get("bpm_max"):
@@ -346,6 +355,5 @@ Select {max_songs} songs.{duration_note}{filter_context}
     except (json.JSONDecodeError, ValueError):
         logger.error("Pass 2: failed to parse AI response: %s", text[:500])
         raise ValueError("AI returned an invalid response for Pass 2. Try again.")
-    selected = result.get("song_ids") or result.get("songs", [])
-    logger.info("Pass 2: AI selected %d songs", len(selected))
+    logger.info("Pass 2: AI selected %d songs", len(extract_song_ids(result)))
     return result
